@@ -6,7 +6,7 @@ from pathlib import Path
 def transcribe_audio(input_path):
     input_path = Path(input_path)
     output_path = input_path.with_suffix(".txt")
-    model = whisper.load_model("base")  # tiny, small are fast but worse. Turbo is too long. Base is fine.
+    model = whisper.load_model("small")  # Goes tiny<base<small<medium<large<largev2<largev3??Turbo. Turbo is too long. Base is fine.
 
     print(f"Processing {input_path}...")
     result = model.transcribe(str(input_path), language="en")
