@@ -1,0 +1,20 @@
+[project]
+name = "MLX8-W5-Audio-Transformer"
+version = "0.1.0"
+description = "Audio CNN and Transformer"
+authors = [
+    { name="Charles Cai", email="charles.cai@socialogix.net" }
+]
+dependencies = [
+    "torch",
+    "torchaudio",
+    "tqdm",
+    "matplotlib",
+    "pandas",
+    "python-dotenv",
+    "numpy",
+    "pyarrow",
+    "soundfile>=0.13.1",
+    "colorlog>=6.9.0",
+]
+requires-python = "==3.10"

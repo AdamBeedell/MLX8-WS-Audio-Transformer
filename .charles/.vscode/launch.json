@@ -1,0 +1,25 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Preprocess UrbanSound8K",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/.charles/spectrogram.py",
+            "args": ["--preprocess"],
+            "console": "integratedTerminal",
+            "python": "${workspaceFolder}/.charles/.venv/bin/python",
+            "cwd": "${workspaceFolder}/.charles"
+        },
+        {
+            "name": "Debug SampleData UrbanSound8K",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/.charles/spectrogram.py",
+            "args": ["--sampledata"],
+            "console": "integratedTerminal",
+            "python": "${workspaceFolder}/.charles/.venv/bin/python",
+            "cwd": "${workspaceFolder}/.charles"
+        }
+    ]
+}
