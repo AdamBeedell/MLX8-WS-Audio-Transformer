@@ -1,0 +1,20 @@
+{
+  "os":  "Linux-6.6.78-Unraid-x86_64-with-glibc2.35",
+  "python":  "CPython 3.10.0",
+  "startedAt":  "2025-07-07T18:15:31.388579Z",
+  "args":  [
+    "--test"
+  ],
+  "program":  "/workspace/_github/AdamBeede/MLX8-WS-Audio-Transformer/.charles/spectrogram.py",
+  "codePath":  ".charles/spectrogram.py",
+  "codePathLocal":  "spectrogram.py",
+  "git":  {
+    "remote":  "https://github.com/AdamBeedell/MLX8-WS-Audio-Transformer.git",
+    "commit":  "f2b49294dc1d99894e325eda4e0d44c600cc1de8"
+  },
+  "email":  "charles.cai@socialogix.net",
+  "root":  "/workspace/_github/AdamBeede/MLX8-WS-Audio-Transformer/.charles",
+  "host":  "bbe0d4c6f2be",
+  "executable":  "/workspace/_github/AdamBeede/MLX8-WS-Audio-Transformer/.charles/.venv/bin/python3",
+  "writerId":  "139b3n6gntysekrhk04egyb900w7jcr4"
+}

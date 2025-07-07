@@ -109,21 +109,27 @@ def preprocess_to_parquet():
                 waveform = torch.nn.functional.pad(waveform, (0, pad))
             else:
                 waveform = waveform[:, :num_samples]
+            
+            # Move waveform to the same device as mel_spectrogram
+            waveform = waveform.to(device)
             mel = mel_spectrogram(waveform)
             log_mel = torch.log(mel + 1e-6)
-            # Store as numpy array for Parquet
+            
+            # Move back to CPU and convert to numpy for storage
+            log_mel_np = log_mel.squeeze(0).cpu().numpy().astype(np.float32)  # shape: [n_mels, time]
             records.append({
                 "rel_path": rel_path,
                 "fold": fold,
                 "class_id": class_id,
                 "class_name": class_name,
-                "log_mel": log_mel.squeeze(0).numpy().astype(np.float32),  # shape: [n_mels, time]
+                "log_mel_flat": log_mel_np.flatten(),  # Flatten to 1D array
+                "log_mel_shape": log_mel_np.shape,     # Store original shape
             })
         except Exception as e:
             logger.error(f"❌ Error processing {abs_path}: {e}")
     out_df = pd.DataFrame(records)
-    # Parquet can't store arrays directly, so use list or serialize
-    out_df["log_mel"] = out_df["log_mel"].apply(lambda x: x.tolist())
+    # Convert shape tuples to lists for Parquet compatibility
+    out_df["log_mel_shape"] = out_df["log_mel_shape"].apply(lambda x: list(x))
     os.makedirs(os.path.dirname(PARQUET_PATH), exist_ok=True)
     out_df.to_parquet(PARQUET_PATH, index=False)
     logger.success(f"✅ Saved processed dataset to {PARQUET_PATH}")
@@ -148,7 +154,10 @@ class UrbanSoundDataSet(Dataset):
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        log_mel = np.array(row["log_mel"], dtype=np.float32)
+        # Reconstruct the log-mel spectrogram from flattened data
+        log_mel_flat = np.array(row["log_mel_flat"], dtype=np.float32)
+        log_mel_shape = tuple(row["log_mel_shape"])
+        log_mel = log_mel_flat.reshape(log_mel_shape)
         # shape: [n_mels, time]
         label = int(row["class_id"])
         return torch.tensor(log_mel), label

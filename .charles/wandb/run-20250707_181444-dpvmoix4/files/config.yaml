@@ -1,0 +1,69 @@
+_wandb:
+    value:
+        cli_version: 0.21.0
+        e:
+            hxlnw394d3fe2ukfv576c1yk19sbxr0z:
+                args:
+                    - --train
+                codePath: .charles/spectrogram.py
+                codePathLocal: spectrogram.py
+                cpu_count: 10
+                cpu_count_logical: 20
+                cudaVersion: "12.8"
+                disk:
+                    /:
+                        total: "450971566080"
+                        used: "276866912256"
+                email: charles.cai@socialogix.net
+                executable: /workspace/_github/AdamBeede/MLX8-WS-Audio-Transformer/.charles/.venv/bin/python3
+                git:
+                    commit: f2b49294dc1d99894e325eda4e0d44c600cc1de8
+                    remote: https://github.com/AdamBeedell/MLX8-WS-Audio-Transformer.git
+                gpu: NVIDIA GeForce RTX 3090
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ampere
+                      cudaCores: 10496
+                      memoryTotal: "25769803776"
+                      name: NVIDIA GeForce RTX 3090
+                      uuid: GPU-b989f6ba-23c4-1b2f-58ec-ba90b216e722
+                host: bbe0d4c6f2be
+                memory:
+                    total: "67250049024"
+                os: Linux-6.6.78-Unraid-x86_64-with-glibc2.35
+                program: /workspace/_github/AdamBeede/MLX8-WS-Audio-Transformer/.charles/spectrogram.py
+                python: CPython 3.10.0
+                root: /workspace/_github/AdamBeede/MLX8-WS-Audio-Transformer/.charles
+                startedAt: "2025-07-07T18:14:44.183871Z"
+                writerId: hxlnw394d3fe2ukfv576c1yk19sbxr0z
+        m: []
+        python_version: 3.10.0
+        t:
+            "1":
+                - 1
+                - 5
+                - 53
+            "2":
+                - 1
+                - 5
+                - 53
+            "3":
+                - 2
+                - 13
+                - 16
+            "4": 3.10.0
+            "5": 0.21.0
+            "12": 0.21.0
+            "13": linux-x86_64
+batch_size:
+    value: 16
+dropout:
+    value: 0.3
+epochs:
+    value: 10
+lr:
+    value: 0.001
+n_classes:
+    value: 10
+n_mels:
+    value: 64
