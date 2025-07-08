@@ -769,22 +769,40 @@ def compute_detailed_metrics(y_true, y_pred, class_names=None):
     }
     
     return metrics
-
-def plot_confusion_matrix(y_true, y_pred, class_names=None, save_path=None):
+def plot_confusion_matrix(y_true, y_pred, class_names=None, save_path=None, normalize=True):
     """
     Plot and save confusion matrix.
+    Each row is normalized to percentages and annotated with total sample counts.
+    
+    Args:
+        y_true: Ground truth labels.
+        y_pred: Predicted labels.
+        class_names: List of class names.
+        save_path: Where to save the image.
+        normalize: If True, normalize each row to percentages.
     """
     if class_names is None:
         class_names = [f"Class_{i}" for i in range(10)]
     
     cm = confusion_matrix(y_true, y_pred)
+    row_totals = cm.sum(axis=1)
+    
+    if normalize:
+        cm_normalized = cm.astype('float') / row_totals[:, None] * 100
+        fmt = '.1f'
+    else:
+        cm_normalized = cm
+        fmt = 'd'
+    
+    # Create new y-axis labels with total counts
+    class_names_with_totals = [f"{name}\n(n={total})" for name, total in zip(class_names, row_totals)]
     
     plt.figure(figsize=(10, 8))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
-                xticklabels=class_names, yticklabels=class_names)
-    plt.title('Confusion Matrix')
+    sns.heatmap(cm_normalized, annot=True, fmt=fmt, cmap='Blues',
+                xticklabels=class_names, yticklabels=class_names_with_totals)
     plt.xlabel('Predicted')
     plt.ylabel('Actual')
+    plt.title('Confusion Matrix (Normalized %)' if normalize else 'Confusion Matrix')
     plt.tight_layout()
     
     if save_path:
@@ -863,10 +881,11 @@ def test_cnn(
     logger.info(f"📋 Classification Report:")
     print(detailed_metrics['classification_report'])
     
-    # Save confusion matrix
-    cm_path = os.path.join(EVAL_PARQUET_PATH, f"confusion_matrix_{os.path.basename(ckpt_path)[:-3]}.png")
-    plot_confusion_matrix(y_true, y_pred, class_names, cm_path)
-    
+    # Save confusion matrix inside Eval folder with hyperparameter info.
+    cm_filename = f"confusion_matrix_{os.path.basename(ckpt_path)[:-3]}.png"
+    cm_path = os.path.join(EVAL_PARQUET_PATH, cm_filename)
+    plot_confusion_matrix(y_true, y_pred, class_names, save_path=cm_path, normalize=True)
+
     if WANDB_API_KEY and WANDB_ENTITY and WANDB_PROJECT:
         wandb.login(key=WANDB_API_KEY)
         wandb_run = wandb.init(
