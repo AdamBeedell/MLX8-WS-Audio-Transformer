@@ -1,6 +1,103 @@
 # DuckDB SQL Queries for UrbanSound8K Dataset
 
-This file contains sample DuckDB SQL queries to explore the processed UrbanSound8K dataset stored in parquet format.
+## Comparison to OpenAI Whiper 
+
+Refer to ../course-materials/mlx_week5_catchup_shapes.pdf
+
+**OpenAI Audio Hyperparameters**
+
+https://github.com/openai/whisper/blob/main/whisper/audio.py#L26
+
+```python
+# hard-coded audio hyperparameters
+SAMPLE_RATE = 16000
+N_FFT = 400
+HOP_LENGTH = 160
+CHUNK_LENGTH = 30
+N_SAMPLES = CHUNK_LENGTH * SAMPLE_RATE  # 480000 samples in a 30-second chunk
+N_FRAMES = exact_div(N_SAMPLES, HOP_LENGTH)  # 3000 frames in a mel spectrogram input
+
+N_SAMPLES_PER_TOKEN = HOP_LENGTH * 2  # the initial convolutions has stride 2
+FRAMES_PER_SECOND = exact_div(SAMPLE_RATE, HOP_LENGTH)  # 10ms per audio frame
+TOKENS_PER_SECOND = exact_div(SAMPLE_RATE, N_SAMPLES_PER_TOKEN)  # 20ms per audio token
+```
+
+OpenAI Whisper Model.py **AudioEncoder** Class
+https://github.com/openai/whisper/blob/main/whisper/model.py#L174
+
+```python
+class AudioEncoder(nn.Module):
+    def __init__(
+        self, n_mels: int, n_ctx: int, n_state: int, n_head: int, n_layer: int
+    ):
+        super().__init__()
+        self.conv1 = Conv1d(n_mels, n_state, kernel_size=3, padding=1)
+        self.conv2 = Conv1d(n_state, n_state, kernel_size=3, stride=2, padding=1)
+        self.register_buffer("positional_embedding", sinusoids(n_ctx, n_state))
+
+        self.blocks: Iterable[ResidualAttentionBlock] = nn.ModuleList(
+            [ResidualAttentionBlock(n_state, n_head) for _ in range(n_layer)]
+        )
+        self.ln_post = LayerNorm(n_state)
+
+    def forward(self, x: Tensor):
+        """
+        x : torch.Tensor, shape = (batch_size, n_mels, n_ctx)
+            the mel spectrogram of the audio
+        """
+        x = F.gelu(self.conv1(x))
+        x = F.gelu(self.conv2(x))
+        x = x.permute(0, 2, 1)
+
+        assert x.shape[1:] == self.positional_embedding.shape, "incorrect audio shape"
+        x = (x + self.positional_embedding).to(x.dtype)
+
+        for block in self.blocks:
+            x = block(x)
+
+        x = self.ln_post(x)
+        return x
+```
+
+
+## Data Preprocessing & Schema
+
+**Uniformity Results**  
+After preprocessing, all audio files are standardized as follows:
+- **Sample rate:** 16,000 Hz
+- **Duration:** Exactly 4.0 seconds
+- **Samples:** Exactly 64,000 samples per file
+- **Channels:** Mono (1 channel)
+
+**Spectrogram Dimensions**
+- **Mel bins:** 64 (`N_MELS`)
+- **Time frames:** 126 frames (with `hop_length=512`)
+- **Final shape:** `[64, 126]` (flattened to `[8064]` for storage)
+
+**Handling Variable Lengths**
+- Short audio (< 4s): Zero-padded to 4 seconds
+- Long audio (> 4s): Truncated to first 4 seconds
+- Exact 4s audio: No modification needed
+
+This ensures the CNN receives consistent input dimensions `[batch_size, 64, 126]` for all samples, regardless of the original audio length variations in the dataset.
+
+**Processed Parquet Schema**
+```sql
+DESCRIBE './.data/UrbanSound8K/processed/urbansound8k.parquet';
+```
+┌───────────────┬─────────────┬─────────┬─────────┬─────────┬─────────┐  
+│  column_name  │ column_type │  null   │   key   │ default │  extra  │  
+│    varchar    │   varchar   │ varchar │ varchar │ varchar │ varchar │  
+├───────────────┼─────────────┼─────────┼─────────┼─────────┼─────────┤  
+│ rel_path      │ VARCHAR     │ YES     │ NULL    │ NULL    │ NULL    │  
+│ fold          │ BIGINT      │ YES     │ NULL    │ NULL    │ NULL    │  
+│ class_id      │ BIGINT      │ YES     │ NULL    │ NULL    │ NULL    │  
+│ class_name    │ VARCHAR     │ YES     │ NULL    │ NULL    │ NULL    │  
+│ log_mel_flat  │ FLOAT[]     │ YES     │ NULL    │ NULL    │ NULL    │  
+│ log_mel_shape │ BIGINT[]    │ YES     │ NULL    │ NULL    │ NULL    │  
+└───────────────┴─────────────┴─────────┴─────────┴─────────┴─────────┘
+
+---
 
 ## Setup
 ```sql
@@ -26,6 +123,20 @@ FROM read_parquet('./.data/UrbanSound8K/processed/urbansound8k.parquet');
 -- Examine column structure
 DESCRIBE './.data/UrbanSound8K/processed/urbansound8k.parquet';
 
+-- Schema:
+-- ┌───────────────┬─────────────┬─────────┬─────────┬─────────┬─────────┐
+-- │  column_name  │ column_type │  null   │   key   │ default │  extra  │
+-- │    varchar    │   varchar   │ varchar │ varchar │ varchar │ varchar │
+-- ├───────────────┼─────────────┼─────────┼─────────┼─────────┼─────────┤
+-- │ rel_path      │ VARCHAR     │ YES     │ NULL    │ NULL    │ NULL    │
+-- │ fold          │ BIGINT      │ YES     │ NULL    │ NULL    │ NULL    │
+-- │ class_id      │ BIGINT      │ YES     │ NULL    │ NULL    │ NULL    │
+-- │ class_name    │ VARCHAR     │ YES     │ NULL    │ NULL    │ NULL    │
+-- │ log_mel_flat  │ FLOAT[]     │ YES     │ NULL    │ NULL    │ NULL    │
+-- │ log_mel_shape │ BIGINT[]    │ YES     │ NULL    │ NULL    │ NULL    │
+-- └───────────────┴─────────────┴─────────┴─────────┴─────────┴─────────┘
+
+-- OLD Version
 -- ┌─────────────┬─────────────┬─────────┬─────────┬─────────┬─────────┐
 -- │ column_name │ column_type │  null   │   key   │ default │  extra  │
 -- │   varchar   │   varchar   │ varchar │ varchar │ varchar │ varchar │
@@ -37,6 +148,8 @@ DESCRIBE './.data/UrbanSound8K/processed/urbansound8k.parquet';
 -- │ log_mel     │ DOUBLE[][]  │ YES     │ NULL    │ NULL    │ NULL    │
 -- └─────────────┴─────────────┴─────────┴─────────┴─────────┴─────────┘
 ```
+
+
 
 ### 3. First Few Records
 ```sql
@@ -111,74 +224,59 @@ GROUP BY CASE WHEN fold = 10 THEN 'Test' ELSE 'Train' END;
 
 ### 8. Log-Mel Spectrogram Array Information
 ```sql
--- Analyze the shape and properties of log_mel arrays
+-- Analyze the shape and properties of log_mel_flat arrays
 SELECT 
     class_name,
     fold,
     rel_path,
-    len(log_mel) as array_length,
-    -- First few elements for inspection
-    log_mel[1:5] as first_elements
+    array_length(log_mel_flat, 1) as flat_array_length,
+    log_mel_shape as shape
 FROM read_parquet('./.data/UrbanSound8K/processed/urbansound8k.parquet')
 LIMIT 5;
 ```
 
 ### Log-Mel Spectrogram Shape Analysis
 ```sql
--- Get the shape of the log_mel array for each row
+-- Get the shape of the log_mel spectrogram for each row
 SELECT
     rel_path,
     class_name,
-    array_length(log_mel, 1) AS n_mels,
-    array_length(log_mel[1], 1) AS n_frames
+    log_mel_shape[1] AS n_mels,
+    log_mel_shape[2] AS n_frames
 FROM read_parquet('./.data/UrbanSound8K/processed/urbansound8k.parquet')
 LIMIT 10;
 ```
 
 ```sql
 SELECT
-      class_name,
-      max(array_length(log_mel, 1)) AS n_mels,
-      MAX(array_length(log_mel[1], 1)) AS n_frames
-  FROM read_parquet('./.data/UrbanSound8K/processed/urbansound8k.parquet') GROUP by class_name;
--- ┌──────────────────┬────────┬──────────┐
--- │    class_name    │ n_mels │ n_frames │
--- │     varchar      │ int64  │  int64   │
--- ├──────────────────┼────────┼──────────┤
--- │ air_conditioner  │     64 │      126 │
--- │ street_music     │     64 │      126 │
--- │ children_playing │     64 │      126 │
--- │ drilling         │     64 │      126 │
--- │ jackhammer       │     64 │      126 │
--- │ gun_shot         │     64 │      126 │
--- │ dog_bark         │     64 │      126 │
--- │ siren            │     64 │      126 │
--- │ car_horn         │     64 │      126 │
--- │ engine_idling    │     64 │      126 │
--- ├──────────────────┴────────┴──────────┤
--- │ 10 rows                    3 columns │
--- └──────────────────────────────────────┘
+    class_name,
+    MAX(log_mel_shape[1]) AS n_mels,
+    MAX(log_mel_shape[2]) AS n_frames
+FROM read_parquet('./.data/UrbanSound8K/processed/urbansound8k.parquet')
+GROUP BY class_name;
+-- All classes should have n_mels=64, n_frames=126
 ```
 
 -- To get summary statistics for all shapes:
 ```sql
 SELECT
-    array_length(log_mel, 1) AS n_mels,
-    array_length(log_mel[1], 1) AS n_frames,
+    log_mel_shape[1] AS n_mels,
+    log_mel_shape[2] AS n_frames,
     COUNT(*) AS count
 FROM read_parquet('./.data/UrbanSound8K/processed/urbansound8k.parquet')
 GROUP BY n_mels, n_frames
 ORDER BY count DESC;
 ```
+
 ### 9. Array Statistics per Class
 ```sql
--- Basic statistics on log_mel array lengths per class
+-- Basic statistics on log_mel_flat array lengths per class
 SELECT 
     class_name,
     COUNT(*) as sample_count,
-    MIN(len(log_mel)) as min_array_length,
-    MAX(len(log_mel)) as max_array_length,
-    ROUND(AVG(len(log_mel)), 2) as avg_array_length
+    MIN(array_length(log_mel_flat, 1)) as min_flat_length,
+    MAX(array_length(log_mel_flat, 1)) as max_flat_length,
+    ROUND(AVG(array_length(log_mel_flat, 1)), 2) as avg_flat_length
 FROM read_parquet('./.data/UrbanSound8K/processed/urbansound8k.parquet')
 GROUP BY class_name
 ORDER BY class_name;
@@ -220,7 +318,7 @@ SELECT
     COUNT(fold) as non_null_folds,
     COUNT(class_id) as non_null_class_ids,
     COUNT(class_name) as non_null_class_names,
-    COUNT(log_mel) as non_null_spectrograms
+    COUNT(log_mel_flat) as non_null_spectrograms
 FROM read_parquet('./.data/UrbanSound8K/processed/urbansound8k.parquet');
 ```
 
@@ -275,7 +373,8 @@ SELECT
     rel_path,
     class_name,
     fold,
-    len(log_mel) as spectrogram_size
+    array_length(log_mel_flat, 1) as spectrogram_flat_size,
+    log_mel_shape as spectrogram_shape
 FROM read_parquet('./.data/UrbanSound8K/processed/urbansound8k.parquet')
 WHERE class_name IN ('dog_bark', 'car_horn', 'siren')
     AND fold IN (1, 2)

@@ -12,7 +12,8 @@ import matplotlib.pyplot as plt
 import logging
 import colorlog
 import wandb
-from sklearn.metrics import precision_score, recall_score, accuracy_score
+from sklearn.metrics import precision_score, recall_score, accuracy_score, f1_score, classification_report, confusion_matrix
+import seaborn as sns
 
 # Setup colorlog logger with emojis
 SUCCESS_LEVEL_NUM = 25
@@ -48,19 +49,21 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
 # Environment variables (define these in .env)
 DATA_ROOT = os.getenv("DATA_ROOT", "./.data/UrbanSound8K")
 METADATA_CSV = os.getenv("METADATA_CSV", "./.data/UrbanSound8K/metadata/UrbanSound8K.csv")
-PARQUET_PATH = os.getenv("PARQUET_PATH", "./.data/UrbanSound8K/processed/urbansound8k.parquet")
+PROCESSED_PARQUET_PATH = os.getenv("PROCESSED_PARQUET_PATH", "./.data/UrbanSound8K/processed")
+EVAL_PARQUET_PATH = os.getenv("EVAL_PARQUET_PATH", "./.data/UrbanSound8K/eval")
 SAMPLE_RATE = int(os.getenv("SAMPLE_RATE", 16000))
-N_MELS = int(os.getenv("N_MELS", 64))
+N_MELS = int(os.getenv("N_MELS", 128))
 N_FFT = int(os.getenv("N_FFT", 1024))
 HOP_LENGTH = int(os.getenv("HOP_LENGTH", 512))
 FMIN = int(os.getenv("FMIN", 0))
 FMAX = int(os.getenv("FMAX", 8000))
 MONO = os.getenv("MONO", "True") == "True"
 DURATION = float(os.getenv("DURATION", 4.0))  # seconds
-BATCH_SIZE = int(os.getenv("BATCH_SIZE", 64))
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", 32))
 EPOCHS = int(os.getenv("EPOCHS", 10))
-LR = float(os.getenv("LR", 1e-3))
+LR = float(os.getenv("LR", 3e-4))
 DROPOUT = float(os.getenv("DROPOUT", 0.3))
+WEIGHT_DECAY = float(os.getenv("WEIGHT_DECAY", 1e-4))
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 logger.success(f"Using device: {device}")
@@ -80,10 +83,39 @@ WANDB_API_KEY = os.getenv("WANDB_API_KEY")
 WANDB_ENTITY = os.getenv("WANDB_ENTITY")
 WANDB_PROJECT = os.getenv("WANDB_PROJECT")
 
+def get_processed_parquet_filename():
+    """Generate processed parquet filename with embedded hyperparameters."""
+    return f"urbansound8k_processed_mels{N_MELS}_hop{HOP_LENGTH}.parquet"
+
+def get_processed_parquet_path():
+    """Get full path for processed parquet file."""
+    return os.path.join(PROCESSED_PARQUET_PATH, get_processed_parquet_filename())
+
+def get_test_parquet_filename():
+    """Generate test parquet filename with embedded hyperparameters."""
+    return f"urbansound8k_test_fold10_mels{N_MELS}_hop{HOP_LENGTH}_batch{BATCH_SIZE}_epochs{EPOCHS}.parquet"
+
+def get_test_parquet_path():
+    """Get full path for test parquet file."""
+    return os.path.join(EVAL_PARQUET_PATH, get_test_parquet_filename())
+
+def get_checkpoint_filename():
+    """Generate checkpoint filename with embedded hyperparameters."""
+    return f"urbansound8k_cnn_final_mels{N_MELS}_hop{HOP_LENGTH}_batch{BATCH_SIZE}_epochs{EPOCHS}_lr{LR}_dropout{DROPOUT}.pt"
+
 def preprocess_to_parquet():
     """
     Preprocess UrbanSound8K audio files to log-mel spectrograms and save as Parquet.
     """
+    parquet_path = get_processed_parquet_path()
+    
+    # Check if file exists and ask for overwrite
+    if os.path.exists(parquet_path):
+        response = input(f"Processed parquet file already exists at {parquet_path}. Overwrite? (y/N): ")
+        if response.lower() not in ['y', 'yes']:
+            logger.info("Preprocessing cancelled.")
+            return
+    
     df = pd.read_csv(METADATA_CSV)
     records = []
     
@@ -127,23 +159,26 @@ def preprocess_to_parquet():
             })
         except Exception as e:
             logger.error(f"❌ Error processing {abs_path}: {e}")
+
     out_df = pd.DataFrame(records)
     # Convert shape tuples to lists for Parquet compatibility
     out_df["log_mel_shape"] = out_df["log_mel_shape"].apply(lambda x: list(x))
-    os.makedirs(os.path.dirname(PARQUET_PATH), exist_ok=True)
-    out_df.to_parquet(PARQUET_PATH, index=False)
-    logger.success(f"✅ Saved processed dataset to {PARQUET_PATH}")
+    os.makedirs(os.path.dirname(parquet_path), exist_ok=True)
+    out_df.to_parquet(parquet_path, index=False)
+    logger.success(f"✅ Saved processed dataset to {parquet_path}")
 
 class UrbanSoundDataSet(Dataset):
     """
     PyTorch Dataset for UrbanSound8K, loading from processed Parquet file.
     """
-    def __init__(self, parquet_path=PARQUET_PATH, folds=None):
+    def __init__(self, parquet_path=None, folds=None):
         """
         Args:
-            parquet_path: Path to processed Parquet file.
+            parquet_path: Path to processed Parquet file. If None, uses default processed path.
             folds: List of folds to include (e.g., [1,2,3,4,5,6,7,8])
         """
+        if parquet_path is None:
+            parquet_path = get_processed_parquet_path()
         self.df = pd.read_parquet(parquet_path)
         if folds is not None:
             self.df = self.df[self.df["fold"].isin(folds)].reset_index(drop=True)
@@ -162,42 +197,154 @@ class UrbanSoundDataSet(Dataset):
         label = int(row["class_id"])
         return torch.tensor(log_mel), label
 
-def plot_waveform_image(waveform, sr, out_path, title=None):
+def preprocess_audio_for_cnn(waveform, sr):
     """
-    Plot and save a waveform image.
+    Preprocess audio the same way as CNN training: pad or truncate to fixed duration.
+    Returns both original and processed waveforms.
     """
     if MONO and waveform.shape[0] > 1:
         waveform = torch.mean(waveform, dim=0, keepdim=True)
     
-    waveform_np = waveform.squeeze().cpu().numpy()
-    time_axis = np.linspace(0, len(waveform_np) / sr, len(waveform_np))
+    # Resample if needed
+    if sr != SAMPLE_RATE:
+        resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=SAMPLE_RATE)
+        waveform = resampler(waveform)
+        sr = SAMPLE_RATE
     
-    plt.figure(figsize=(12, 4))
-    plt.plot(time_axis, waveform_np)
-    plt.title(title if title else "Waveform")
+    # Create CNN-ready version (pad or truncate to fixed duration)
+    num_samples = int(SAMPLE_RATE * DURATION)
+    waveform_cnn = waveform.clone()
+    
+    if waveform_cnn.shape[1] < num_samples:
+        # Pad with zeros
+        pad = num_samples - waveform_cnn.shape[1]
+        waveform_cnn = torch.nn.functional.pad(waveform_cnn, (0, pad))
+    else:
+        # Truncate
+        waveform_cnn = waveform_cnn[:, :num_samples]
+    
+    return waveform, waveform_cnn, sr
+
+def plot_waveform_image(waveform, sr, out_path, title=None):
+    """
+    Plot and save a waveform image, showing both original and CNN-processed (4s fixed) versions.
+    Red box indicates the fixed 4s window that goes to CNN classifier.
+    """
+    waveform_orig, waveform_cnn, sr = preprocess_audio_for_cnn(waveform, sr)
+    
+    # Original waveform
+    waveform_orig_np = waveform_orig.squeeze().cpu().numpy()
+    time_axis_orig = np.linspace(0, len(waveform_orig_np) / sr, len(waveform_orig_np))
+    
+    # CNN waveform (fixed 4s)
+    waveform_cnn_np = waveform_cnn.squeeze().cpu().numpy()
+    time_axis_cnn = np.linspace(0, DURATION, len(waveform_cnn_np))
+    
+    plt.figure(figsize=(12, 6))
+    
+    # Plot original waveform
+    plt.subplot(2, 1, 1)
+    plt.plot(time_axis_orig, waveform_orig_np, 'b-', alpha=0.7, label='Original')
+    
+    # Add red box for 4s window
+    plt.axvspan(0, min(DURATION, time_axis_orig[-1]), alpha=0.2, color='red', label='CNN Input (4s)')
+    if time_axis_orig[-1] > DURATION:
+        plt.axvline(DURATION, color='red', linestyle='--', alpha=0.8, label='4s cutoff')
+    
+    plt.title(f"{title if title else 'Waveform'} - Original")
     plt.xlabel("Time (seconds)")
     plt.ylabel("Amplitude")
+    plt.legend()
     plt.grid(True, alpha=0.3)
+    
+    # Plot CNN-processed waveform (fixed 4s)
+    plt.subplot(2, 1, 2)
+    plt.plot(time_axis_cnn, waveform_cnn_np, 'r-', alpha=0.8)
+    
+    # Red box around entire CNN input
+    plt.axvspan(0, DURATION, alpha=0.1, color='red', label='CNN Input (Fixed 4s)')
+    plt.title("CNN Input - Fixed 4s (padded/truncated)")
+    plt.xlabel("Time (seconds)")
+    plt.ylabel("Amplitude")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
     plt.tight_layout()
-    plt.savefig(out_path)
+    plt.savefig(out_path, dpi=150, bbox_inches='tight')
     plt.close()
 
 def plot_spectrogram_image(waveform, sr, out_path, title=None):
-
-    if MONO and waveform.shape[0] > 1:
-        waveform = torch.mean(waveform, dim=0, keepdim=True)
-    # Move waveform to the same device as mel_spectrogram
-    waveform = waveform.to(device)
-    mel = mel_spectrogram(waveform)
-    log_mel = torch.log(mel + 1e-6).squeeze().cpu().numpy()
-    plt.figure(figsize=(10, 4))
-    plt.imshow(log_mel, aspect='auto', origin='lower')
-    plt.colorbar(format='%+2.0f dB')
-    plt.title(title if title else "Log-Mel Spectrogram")
-    plt.xlabel("Frames")
+    """
+    Plot and save a log-mel spectrogram image, showing both original and CNN-processed (4s fixed) versions.
+    Red box indicates the fixed 4s window that goes to CNN classifier.
+    """
+    waveform_orig, waveform_cnn, sr = preprocess_audio_for_cnn(waveform, sr)
+    
+    # Original spectrogram
+    waveform_orig = waveform_orig.to(device)
+    mel_orig = mel_spectrogram(waveform_orig)
+    log_mel_orig = torch.log(mel_orig + 1e-6).squeeze().cpu().numpy()
+    n_frames_orig = log_mel_orig.shape[-1]
+    time_axis_orig = np.linspace(0, n_frames_orig * HOP_LENGTH / SAMPLE_RATE, n_frames_orig)
+    
+    # CNN spectrogram (fixed 4s)
+    waveform_cnn = waveform_cnn.to(device)
+    mel_cnn = mel_spectrogram(waveform_cnn)
+    log_mel_cnn = torch.log(mel_cnn + 1e-6).squeeze().cpu().numpy()
+    n_frames_cnn = log_mel_cnn.shape[-1]
+    time_axis_cnn = np.linspace(0, DURATION, n_frames_cnn)
+    
+    # Use same color scale for both plots
+    vmin = min(log_mel_orig.min(), log_mel_cnn.min())
+    vmax = max(log_mel_orig.max(), log_mel_cnn.max())
+    
+    plt.figure(figsize=(12, 8))
+    
+    # Plot original spectrogram
+    plt.subplot(2, 1, 1)
+    im1 = plt.imshow(log_mel_orig, aspect='auto', origin='lower', 
+                     extent=[0, time_axis_orig[-1], 0, log_mel_orig.shape[0]], 
+                     cmap='viridis', vmin=vmin, vmax=vmax)
+    
+    # Add red box outline only (no fill to avoid color pollution)
+    if time_axis_orig[-1] > DURATION:
+        # Show cutoff line
+        plt.axvline(DURATION, color='red', linestyle='--', linewidth=2, alpha=0.8, label='4s cutoff')
+        # Add red box outline for first 4s
+        plt.plot([0, DURATION, DURATION, 0, 0], 
+                 [0, 0, log_mel_orig.shape[0], log_mel_orig.shape[0], 0], 
+                 'r-', linewidth=2, alpha=0.8, label='CNN Input (4s)')
+    else:
+        # Entire signal is ≤4s, outline the whole thing
+        plt.plot([0, time_axis_orig[-1], time_axis_orig[-1], 0, 0], 
+                 [0, 0, log_mel_orig.shape[0], log_mel_orig.shape[0], 0], 
+                 'r-', linewidth=2, alpha=0.8, label='CNN Input (≤4s)')
+    
+    plt.colorbar(im1, format='%+2.0f dB')
+    plt.title(f"{title if title else 'Log-Mel Spectrogram'} - Original")
+    plt.xlabel("Time (seconds)")
     plt.ylabel("Mel bins")
+    plt.legend()
+    
+    # Plot CNN spectrogram (fixed 4s)
+    plt.subplot(2, 1, 2)
+    im2 = plt.imshow(log_mel_cnn, aspect='auto', origin='lower', 
+                     extent=[0, DURATION, 0, log_mel_cnn.shape[0]], 
+                     cmap='viridis', vmin=vmin, vmax=vmax)
+    
+    # Red box outline around entire CNN input (no fill)
+    plt.plot([0, DURATION, DURATION, 0, 0], 
+             [0, 0, log_mel_cnn.shape[0], log_mel_cnn.shape[0], 0], 
+             'r-', linewidth=2, alpha=0.8, label='CNN Input (Fixed 4s)')
+    
+    plt.colorbar(im2, format='%+2.0f dB')
+    plt.title("CNN Input - Fixed 4s (padded/truncated)")
+    plt.xlabel("Time (seconds)")
+    plt.ylabel("Mel bins")
+    plt.legend()
+    
     plt.tight_layout()
-    plt.savefig(out_path)
+    plt.savefig(out_path, dpi=150, bbox_inches='tight')
     plt.close()
 
 def export_sample_waveforms():
@@ -206,7 +353,7 @@ def export_sample_waveforms():
     Images are named as sample-waveform-<class_name>-1.png and sample-waveform-<class_name>-2.png.
     """
     df = pd.read_csv(METADATA_CSV)
-    processed_dir = os.path.dirname(PARQUET_PATH)
+    processed_dir = PROCESSED_PARQUET_PATH
     os.makedirs(processed_dir, exist_ok=True)
     rng = np.random.default_rng(seed=42)
     
@@ -245,7 +392,7 @@ def export_sample_spectrograms():
     Images are named as sample-spectrogram-<class_name>-1.png and sample-spectrogram-<class_name>-2.png.
     """
     df = pd.read_csv(METADATA_CSV)
-    processed_dir = os.path.dirname(PARQUET_PATH)
+    processed_dir = PROCESSED_PARQUET_PATH
     os.makedirs(processed_dir, exist_ok=True)
     rng = np.random.default_rng(seed=42)
     for class_id in sorted(df["classID"].unique()):
@@ -355,7 +502,7 @@ class CNNUrbanSound8KClassifier(torch.nn.Module):
 
     def train_model(
         self,
-        parquet_path=PARQUET_PATH,
+        parquet_path=None,
         model_dir=MODEL_ROOT,
         batch_size=BATCH_SIZE,
         epochs=EPOCHS,
@@ -366,13 +513,15 @@ class CNNUrbanSound8KClassifier(torch.nn.Module):
         wandb_run=None,
         run_name="urbansound8K_spectrogram_cnn_classifier"
     ):
+        if parquet_path is None:
+            parquet_path = get_processed_parquet_path()
         os.makedirs(model_dir, exist_ok=True)
         train_ds = UrbanSoundDataSet(parquet_path, folds=list(range(1, 9)))
         eval_ds = UrbanSoundDataSet(parquet_path, folds=[9])
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, drop_last=True)
         eval_loader = DataLoader(eval_ds, batch_size=batch_size, shuffle=False)
         model = self.to(device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=WEIGHT_DECAY)
         criterion = torch.nn.CrossEntropyLoss()
         for epoch in range(epochs):
             model.train()
@@ -389,26 +538,29 @@ class CNNUrbanSound8KClassifier(torch.nn.Module):
                     pbar.set_postfix(loss=loss.item())
             avg_loss = total_loss / len(train_loader.dataset)
             logger.success(f"Epoch {epoch+1}: Train loss={avg_loss:.4f}")
-            # Save checkpoint
-            ckpt_path = os.path.join(model_dir, f"{epoch+1}_urbansound8k_cnn.pt")
-            torch.save(model.state_dict(), ckpt_path)
-            logger.success(f"Saved checkpoint: {ckpt_path}")
+            
             # Evaluate on fold 9
             eval_results = eval_or_test_cnn(
                 model, eval_loader, eval_ds.df, device, n_classes, return_df=True, show_tqdm=True
             )
             eval_out_path = os.path.join(
-                os.path.dirname(parquet_path),
+                EVAL_PARQUET_PATH,
                 f"urbansound8k_eval_fold9_{epoch+1}.parquet"
             )
+            os.makedirs(os.path.dirname(eval_out_path), exist_ok=True)
             eval_results.to_parquet(eval_out_path, index=False)
             logger.success(f"Saved eval results: {eval_out_path}")
+            
             # Compute metrics
             y_true = eval_results["class_id"].values
             y_pred = eval_results["predicted_class_id"].values
             eval_acc = accuracy_score(y_true, y_pred)
             eval_prec = precision_score(y_true, y_pred, average="macro", zero_division=0)
             eval_rec = recall_score(y_true, y_pred, average="macro", zero_division=0)
+            eval_f1 = f1_score(y_true, y_pred, average="macro", zero_division=0)
+            
+            logger.success(f"Epoch {epoch+1}: Eval Acc={eval_acc:.4f}, Prec={eval_prec:.4f}, Rec={eval_rec:.4f}, F1={eval_f1:.4f}")
+            
             # Log to wandb
             if wandb_run is not None:
                 wandb_run.log({
@@ -417,10 +569,16 @@ class CNNUrbanSound8KClassifier(torch.nn.Module):
                     "eval_accuracy": eval_acc,
                     "eval_precision": eval_prec,
                     "eval_recall": eval_rec,
+                    "eval_f1": eval_f1,
                 })
+        
+        # Save final checkpoint only after all epochs
+        final_ckpt_path = os.path.join(model_dir, get_checkpoint_filename())
+        torch.save(model.state_dict(), final_ckpt_path)
+        logger.success(f"Saved final checkpoint: {final_ckpt_path}")
 
 def train_cnn(
-    parquet_path=PARQUET_PATH,
+    parquet_path=None,
     model_dir=MODEL_ROOT,
     batch_size=BATCH_SIZE,
     epochs=EPOCHS,
@@ -429,6 +587,8 @@ def train_cnn(
     n_mels=N_MELS,
     device=device
 ):
+    if parquet_path is None:
+        parquet_path = get_processed_parquet_path()
     run_name = "urbansound8K_cnn_classifier_x"
     wandb_run = None
     if WANDB_API_KEY and WANDB_ENTITY and WANDB_PROJECT:
@@ -444,6 +604,7 @@ def train_cnn(
                 "n_classes": n_classes,
                 "n_mels": n_mels,
                 "dropout": DROPOUT,
+                "weight_decay": WEIGHT_DECAY,
             }
         )
     model = CNNUrbanSound8KClassifier(n_classes=n_classes, n_mels=n_mels, dropout=DROPOUT)
@@ -482,43 +643,230 @@ def eval_or_test_cnn(model, loader, base_df, device, n_classes, return_df=False,
         return out_df
     return preds
 
+
+ # CNN model that directly processes raw waveforms.
+class CNNWaveformClassifier(torch.nn.Module):
+    def __init__(self, n_classes=10, dropout=DROPOUT):
+        super(CNNWaveformClassifier, self).__init__()
+        self.conv_layers = torch.nn.Sequential(
+            # Lower-level feature extraction from raw waveform
+            torch.nn.Conv1d(1, 64, kernel_size=80, stride=16),
+            torch.nn.BatchNorm1d(64),
+            torch.nn.ReLU(),
+            torch.nn.MaxPool1d(kernel_size=4),
+            
+            torch.nn.Conv1d(64, 128, kernel_size=3, padding=1),
+            torch.nn.BatchNorm1d(128),
+            torch.nn.ReLU(),
+            torch.nn.MaxPool1d(kernel_size=4),
+            
+            torch.nn.Conv1d(128, 256, kernel_size=3, padding=1),
+            torch.nn.BatchNorm1d(256),
+            torch.nn.ReLU(),
+            torch.nn.MaxPool1d(kernel_size=4),
+            
+            torch.nn.AdaptiveAvgPool1d(1),  # Global pooling
+        )
+        self.classifier = torch.nn.Sequential(
+            torch.nn.Flatten(),  # [B, 256, 1] -> [B, 256]
+            torch.nn.Linear(256, 128),
+            torch.nn.ReLU(),
+            torch.nn.Dropout(dropout),
+            torch.nn.Linear(128, n_classes)
+        )
+        
+    def forward(self, x):
+        features = self.conv_layers(x)
+        logits = self.classifier(features)
+        return logits
+
+def train_waveform_classifier():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Use folds 1-8 for training and fold 9 for validation (as in your spectrogram approach)
+    train_ds = UrbanSoundRawDataset(METADATA_CSV, folds=list(range(1, 9)))
+    val_ds = UrbanSoundRawDataset(METADATA_CSV, folds=[9])
+    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
+    val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
+    
+    model = CNNWaveformClassifier().to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+    criterion = torch.nn.CrossEntropyLoss()
+    
+    for epoch in range(EPOCHS):
+        model.train()
+        total_loss = 0
+        for xb, yb in tqdm(train_loader, desc=f"Train Epoch {epoch+1}"):
+            xb, yb = xb.to(device), yb.to(device)
+            optimizer.zero_grad()
+            logits = model(xb)
+            loss = criterion(logits, yb)
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item() * xb.size(0)
+        avg_loss = total_loss / len(train_loader.dataset)
+        print(f"Epoch {epoch+1}: Train Loss = {avg_loss:.4f}")
+        
+        # Validation step
+        model.eval()
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for xb, yb in val_loader:
+                xb, yb = xb.to(device), yb.to(device)
+                logits = model(xb)
+                preds = torch.argmax(logits, dim=1)
+                correct += (preds == yb).sum().item()
+                total += yb.size(0)
+        print(f"Epoch {epoch+1}: Val Accuracy = {correct / total:.4f}")
+    
+    os.makedirs(MODEL_ROOT, exist_ok=True)
+    ckpt_path = os.path.join(MODEL_ROOT, "cnn_waveform_classifier.pt")
+    torch.save(model.state_dict(), ckpt_path)
+    print(f"Saved model to {ckpt_path}")
+
+def compute_detailed_metrics(y_true, y_pred, class_names=None):
+    """
+    Compute detailed classification metrics including per-class metrics.
+    """
+    if class_names is None:
+        class_names = [f"Class_{i}" for i in range(10)]
+    
+    # Overall metrics
+    accuracy = accuracy_score(y_true, y_pred)
+    precision_macro = precision_score(y_true, y_pred, average="macro", zero_division=0)
+    recall_macro = recall_score(y_true, y_pred, average="macro", zero_division=0)
+    f1_macro = f1_score(y_true, y_pred, average="macro", zero_division=0)
+    
+    # Weighted metrics (account for class imbalance)
+    precision_weighted = precision_score(y_true, y_pred, average="weighted", zero_division=0)
+    recall_weighted = recall_score(y_true, y_pred, average="weighted", zero_division=0)
+    f1_weighted = f1_score(y_true, y_pred, average="weighted", zero_division=0)
+    
+    # Per-class metrics
+    precision_per_class = precision_score(y_true, y_pred, average=None, zero_division=0)
+    recall_per_class = recall_score(y_true, y_pred, average=None, zero_division=0)
+    f1_per_class = f1_score(y_true, y_pred, average=None, zero_division=0)
+    
+    # Confusion matrix
+    cm = confusion_matrix(y_true, y_pred)
+    
+    # Classification report
+    report = classification_report(y_true, y_pred, target_names=class_names, zero_division=0)
+    
+    metrics = {
+        "accuracy": accuracy,
+        "precision_macro": precision_macro,
+        "recall_macro": recall_macro,
+        "f1_macro": f1_macro,
+        "precision_weighted": precision_weighted,
+        "recall_weighted": recall_weighted,
+        "f1_weighted": f1_weighted,
+        "precision_per_class": precision_per_class,
+        "recall_per_class": recall_per_class,
+        "f1_per_class": f1_per_class,
+        "confusion_matrix": cm,
+        "classification_report": report,
+    }
+    
+    return metrics
+
+def plot_confusion_matrix(y_true, y_pred, class_names=None, save_path=None):
+    """
+    Plot and save confusion matrix.
+    """
+    if class_names is None:
+        class_names = [f"Class_{i}" for i in range(10)]
+    
+    cm = confusion_matrix(y_true, y_pred)
+    
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                xticklabels=class_names, yticklabels=class_names)
+    plt.title('Confusion Matrix')
+    plt.xlabel('Predicted')
+    plt.ylabel('Actual')
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        logger.info(f"📊 Saved confusion matrix to {save_path}")
+    
+    plt.close()
+
 def test_cnn(
-    parquet_path=PARQUET_PATH,
+    parquet_path=None,
     model_dir=MODEL_ROOT,
     n_classes=10,
     n_mels=N_MELS,
     device=device
 ):
-    checkpoints = [
-        f for f in os.listdir(model_dir)
-        if f.endswith("_urbansound8k_cnn.pt")
-    ]
-    if not checkpoints:
-        logger.error("No checkpoints found for testing.")
-        return
-    last_ckpt = sorted(checkpoints, key=lambda x: int(x.split("_")[0]))[-1]
-    ckpt_path = os.path.join(model_dir, last_ckpt)
-    logger.success(f"Loading checkpoint: {ckpt_path}")
+    if parquet_path is None:
+        parquet_path = get_processed_parquet_path()
+    
+    # Look for final checkpoint with hyperparameters
+    final_ckpt_name = get_checkpoint_filename()
+    final_ckpt_path = os.path.join(model_dir, final_ckpt_name)
+    
+    if os.path.exists(final_ckpt_path):
+        ckpt_path = final_ckpt_path
+        logger.success(f"Loading final checkpoint: {ckpt_path}")
+    else:
+        # Fallback to old naming pattern if new one doesn't exist
+        checkpoints = [
+            f for f in os.listdir(model_dir)
+            if f.endswith("_urbansound8k_cnn.pt")
+        ]
+        if not checkpoints:
+            logger.error("No checkpoints found for testing.")
+            return
+        last_ckpt = sorted(checkpoints, key=lambda x: int(x.split("_")[0]))[-1]
+        ckpt_path = os.path.join(model_dir, last_ckpt)
+        logger.success(f"Loading checkpoint: {ckpt_path}")
+    
     test_ds = UrbanSoundDataSet(parquet_path, folds=[10])
     test_loader = DataLoader(test_ds, batch_size=64, shuffle=False)
     model = CNNUrbanSound8KClassifier(n_classes=n_classes, n_mels=n_mels, dropout=DROPOUT).to(device)
     model.load_state_dict(torch.load(ckpt_path, map_location=device))
+    
     # Run test with tqdm
     test_results = eval_or_test_cnn(
         model, test_loader, test_ds.df, device, n_classes, return_df=True, show_tqdm=True
     )
-    test_out_path = os.path.join(
-        os.path.dirname(parquet_path),
-        "urbansound8k_test_fold10.parquet"
-    )
+    test_out_path = get_test_parquet_path()
+    os.makedirs(os.path.dirname(test_out_path), exist_ok=True)
     test_results.to_parquet(test_out_path, index=False)
     logger.success(f"Saved test results: {test_out_path}")
-    # Compute metrics
+    
+    # Compute detailed metrics
     y_true = test_results["class_id"].values
     y_pred = test_results["predicted_class_id"].values
-    test_acc = accuracy_score(y_true, y_pred)
-    test_prec = precision_score(y_true, y_pred, average="macro", zero_division=0)
-    test_rec = recall_score(y_true, y_pred, average="macro", zero_division=0)
+    
+    # UrbanSound8K class names
+    class_names = [
+        "air_conditioner", "car_horn", "children_playing", "dog_bark", "drilling",
+        "engine_idling", "gun_shot", "jackhammer", "siren", "street_music"
+    ]
+    
+    detailed_metrics = compute_detailed_metrics(y_true, y_pred, class_names)
+    
+    # Print detailed results
+    logger.success(f"🎯 Test Results:")
+    logger.success(f"   Accuracy: {detailed_metrics['accuracy']:.4f}")
+    logger.success(f"   Precision (macro): {detailed_metrics['precision_macro']:.4f}")
+    logger.success(f"   Recall (macro): {detailed_metrics['recall_macro']:.4f}")
+    logger.success(f"   F1-score (macro): {detailed_metrics['f1_macro']:.4f}")
+    logger.success(f"   Precision (weighted): {detailed_metrics['precision_weighted']:.4f}")
+    logger.success(f"   Recall (weighted): {detailed_metrics['recall_weighted']:.4f}")
+    logger.success(f"   F1-score (weighted): {detailed_metrics['f1_weighted']:.4f}")
+    
+    # Print classification report
+    logger.info(f"📋 Classification Report:")
+    print(detailed_metrics['classification_report'])
+    
+    # Save confusion matrix
+    cm_path = os.path.join(EVAL_PARQUET_PATH, f"confusion_matrix_{os.path.basename(ckpt_path)[:-3]}.png")
+    plot_confusion_matrix(y_true, y_pred, class_names, cm_path)
+    
     if WANDB_API_KEY and WANDB_ENTITY and WANDB_PROJECT:
         wandb.login(key=WANDB_API_KEY)
         wandb_run = wandb.init(
@@ -526,17 +874,36 @@ def test_cnn(
             entity=WANDB_ENTITY,
             name="urbansound8K_cnn_classifier_test",
             config={
-                "test_checkpoint": last_ckpt,
+                "test_checkpoint": os.path.basename(ckpt_path),
                 "n_classes": n_classes,
                 "n_mels": n_mels,
                 "dropout": DROPOUT,
+                "weight_decay": WEIGHT_DECAY,
             }
         )
+        
+        # Log all metrics to wandb
         wandb_run.log({
-            "test_accuracy": test_acc,
-            "test_precision": test_prec,
-            "test_recall": test_rec,
+            "test_accuracy": detailed_metrics['accuracy'],
+            "test_precision_macro": detailed_metrics['precision_macro'],
+            "test_recall_macro": detailed_metrics['recall_macro'],
+            "test_f1_macro": detailed_metrics['f1_macro'],
+            "test_precision_weighted": detailed_metrics['precision_weighted'],
+            "test_recall_weighted": detailed_metrics['recall_weighted'],
+            "test_f1_weighted": detailed_metrics['f1_weighted'],
         })
+        
+        # Log per-class metrics
+        for i, class_name in enumerate(class_names):
+            wandb_run.log({
+                f"test_precision_{class_name}": detailed_metrics['precision_per_class'][i],
+                f"test_recall_{class_name}": detailed_metrics['recall_per_class'][i],
+                f"test_f1_{class_name}": detailed_metrics['f1_per_class'][i],
+            })
+        
+        # Log confusion matrix as image
+        wandb_run.log({"confusion_matrix": wandb.Image(cm_path)})
+        
         wandb_run.finish()
 
 if __name__ == "__main__":
@@ -558,5 +925,5 @@ if __name__ == "__main__":
         train_cnn()
     if getattr(args, 'test_cnn'):
         test_cnn()
-    else:
+    elif not any([args.preprocess, getattr(args, 'sample_waveform'), getattr(args, 'sample_spectrogram'), getattr(args, 'train_cnn'), getattr(args, 'test_cnn')]):
         logger.error("No action specified. Use --help for options.")
