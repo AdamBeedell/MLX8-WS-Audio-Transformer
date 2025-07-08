@@ -60,7 +60,7 @@ class AudioEncoder(nn.Module):
 ```
 
 
-## Data Preprocessing & Schema
+## Data Preprocessing & Schema V1 (Old)
 
 **Uniformity Results**  
 After preprocessing, all audio files are standardized as follows:
@@ -81,23 +81,69 @@ After preprocessing, all audio files are standardized as follows:
 
 This ensures the CNN receives consistent input dimensions `[batch_size, 64, 126]` for all samples, regardless of the original audio length variations in the dataset.
 
+## Data Preprocessing & Schema V2 (New)
+
+> Overall performance is similar: v1 **64%** vs V2 **68%**
+
+**Overview**  
+The new preprocessing pipeline stores each audio file as a *flattened* log-mel spectrogram array, along with its original shape, for efficient storage and fast loading. This enables flexible reshaping for model input and supports variable spectrogram shapes if hyperparameters change.
+
+**Key Features**
+- **Sample rate:** 16,000 Hz (same as V1)
+- **Duration:** 4.0 seconds (same as V1)
+- **Channels:** Mono (1 channel)
+- **Spectrogram:** Log-mel, computed with configurable hyperparameters (see `.env`)
+- **Shape:** `[N_MELS, N_FRAMES]` (default: `[128, 501]` for `N_MELS=128`, `HOP_LENGTH=128`)
+- **Storage:** Flattened 1D array (`log_mel_flat`) and shape (`log_mel_shape`) columns in Parquet
+
+**Differences from V1**
+- V1 used `[64, 126]` shape (with `N_MELS=64`, `HOP_LENGTH=512`).
+- V2 supports arbitrary `N_MELS` and `HOP_LENGTH` (see `.env`), defaulting to `[128, 501]`.
+- V2 stores the *flattened* spectrogram and its shape, not a 2D array, for better compatibility and flexibility.
+
+## SQL Scripts
+
 **Processed Parquet Schema**
 ```sql
 DESCRIBE './.data/UrbanSound8K/processed/urbansound8k.parquet';
-```
-┌───────────────┬─────────────┬─────────┬─────────┬─────────┬─────────┐  
-│  column_name  │ column_type │  null   │   key   │ default │  extra  │  
-│    varchar    │   varchar   │ varchar │ varchar │ varchar │ varchar │  
-├───────────────┼─────────────┼─────────┼─────────┼─────────┼─────────┤  
-│ rel_path      │ VARCHAR     │ YES     │ NULL    │ NULL    │ NULL    │  
-│ fold          │ BIGINT      │ YES     │ NULL    │ NULL    │ NULL    │  
-│ class_id      │ BIGINT      │ YES     │ NULL    │ NULL    │ NULL    │  
-│ class_name    │ VARCHAR     │ YES     │ NULL    │ NULL    │ NULL    │  
-│ log_mel_flat  │ FLOAT[]     │ YES     │ NULL    │ NULL    │ NULL    │  
-│ log_mel_shape │ BIGINT[]    │ YES     │ NULL    │ NULL    │ NULL    │  
-└───────────────┴─────────────┴─────────┴─────────┴─────────┴─────────┘
 
----
+-- ┌───────────────┬─────────────┬─────────┬─────────┬─────────┬─────────┐  
+-- │  column_name  │ column_type │  null   │   key   │ default │  extra  │  
+-- │    varchar    │   varchar   │ varchar │ varchar │ varchar │ varchar │  
+-- ├───────────────┼─────────────┼─────────┼─────────┼─────────┼─────────┤  
+-- │ rel_path      │ VARCHAR     │ YES     │ NULL    │ NULL    │ NULL    │  
+-- │ fold          │ BIGINT      │ YES     │ NULL    │ NULL    │ NULL    │  
+-- │ class_id      │ BIGINT      │ YES     │ NULL    │ NULL    │ NULL    │  
+-- │ class_name    │ VARCHAR     │ YES     │ NULL    │ NULL    │ NULL    │  
+-- │ log_mel_flat  │ FLOAT[]     │ YES     │ NULL    │ NULL    │ NULL    │  
+-- │ log_mel_shape │ BIGINT[]    │ YES     │ NULL    │ NULL    │ NULL    │  
+-- └───────────────┴─────────────┴─────────┴─────────┴─────────┴─────────┘
+```
+
+**Typical log-mel shape:**  
+- For `N_MELS=128`, `HOP_LENGTH=128`, `DURATION=4.0s`, `SAMPLE_RATE=16000`:
+  - `n_mels = 128`
+  - `n_frames = 1 + int((SAMPLE_RATE * DURATION - N_FFT) / HOP_LENGTH)`  
+    (with `N_FFT=1024` by default, gives `n_frames ≈ 501`)
+  - **Final shape:** `[128, 501]` (flattened to `[64128]`)
+
+**Handling Variable Lengths**
+- All audio is padded or truncated to exactly 4.0 seconds before spectrogram computation, ensuring consistent input size.
+
+**Usage**
+- To reconstruct the spectrogram:  
+  `log_mel = np.array(log_mel_flat).reshape(log_mel_shape)`
+
+**Example Query: Preview Data with Spectrogram Shape**
+```sql
+SELECT 
+    rel_path, 
+    class_name, 
+    log_mel_shape,
+    array_length(log_mel_flat, 1) as flat_length
+FROM read_parquet('./.data/UrbanSound8K/processed/urbansound8k.parquet')
+LIMIT 5;
+```
 
 ## Setup
 ```sql

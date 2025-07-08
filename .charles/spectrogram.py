@@ -14,6 +14,7 @@ import colorlog
 import wandb
 from sklearn.metrics import precision_score, recall_score, accuracy_score, f1_score, classification_report, confusion_matrix
 import seaborn as sns
+import math
 
 # Setup colorlog logger with emojis
 SUCCESS_LEVEL_NUM = 25
@@ -65,6 +66,13 @@ LR = float(os.getenv("LR", 3e-4))
 DROPOUT = float(os.getenv("DROPOUT", 0.3))
 WEIGHT_DECAY = float(os.getenv("WEIGHT_DECAY", 1e-4))
 
+# Add transformer hyperparameters from env
+TRANSFORMER_DIM = int(os.getenv("TRANSFORMER_DIM", 128))
+TRANSFORMER_HEADS = int(os.getenv("TRANSFORMER_HEADS", 4))
+TRANSFORMER_LAYERS = int(os.getenv("TRANSFORMER_LAYERS", 2))
+TRANSFORMER_DROPOUT = float(os.getenv("TRANSFORMER_DROPOUT", 0.1))
+TRANSFORMER_MLP_DIM = int(os.getenv("TRANSFORMER_MLP_DIM", 256))
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 logger.success(f"Using device: {device}")
 
@@ -99,9 +107,15 @@ def get_test_parquet_path():
     """Get full path for test parquet file."""
     return os.path.join(EVAL_PARQUET_PATH, get_test_parquet_filename())
 
-def get_checkpoint_filename():
+def get_checkpoint_filename(model_type="cnn"):
     """Generate checkpoint filename with embedded hyperparameters."""
-    return f"urbansound8k_cnn_final_mels{N_MELS}_hop{HOP_LENGTH}_batch{BATCH_SIZE}_epochs{EPOCHS}_lr{LR}_dropout{DROPOUT}.pt"
+    if model_type == "cnn":
+        model_str = "cnn"
+    elif model_type == "transformer":
+        model_str = "transformer"
+    else:
+        raise ValueError(f"Unknown model_type: {model_type}")
+    return f"urbansound8k_{model_str}_final_mels{N_MELS}_hop{HOP_LENGTH}_batch{BATCH_SIZE}_epochs{EPOCHS}_lr{LR}_dropout{DROPOUT}.pt"
 
 def preprocess_to_parquet():
     """
@@ -543,13 +557,15 @@ class CNNUrbanSound8KClassifier(torch.nn.Module):
             eval_results = eval_or_test_cnn(
                 model, eval_loader, eval_ds.df, device, n_classes, return_df=True, show_tqdm=True
             )
-            eval_out_path = os.path.join(
-                EVAL_PARQUET_PATH,
-                f"urbansound8k_eval_fold9_{epoch+1}.parquet"
-            )
-            os.makedirs(os.path.dirname(eval_out_path), exist_ok=True)
-            eval_results.to_parquet(eval_out_path, index=False)
-            logger.success(f"Saved eval results: {eval_out_path}")
+            # Only save eval parquet on last epoch
+            if epoch == epochs - 1:
+                eval_out_path = os.path.join(
+                    EVAL_PARQUET_PATH,
+                    f"urbansound8k_eval_cnn_fold9_{epoch+1}.parquet"
+                )
+                os.makedirs(os.path.dirname(eval_out_path), exist_ok=True)
+                eval_results.to_parquet(eval_out_path, index=False)
+                logger.success(f"Saved eval results: {eval_out_path}")
             
             # Compute metrics
             y_true = eval_results["class_id"].values
@@ -573,7 +589,7 @@ class CNNUrbanSound8KClassifier(torch.nn.Module):
                 })
         
         # Save final checkpoint only after all epochs
-        final_ckpt_path = os.path.join(model_dir, get_checkpoint_filename())
+        final_ckpt_path = os.path.join(model_dir, get_checkpoint_filename(model_type="cnn"))
         torch.save(model.state_dict(), final_ckpt_path)
         logger.success(f"Saved final checkpoint: {final_ckpt_path}")
 
@@ -822,7 +838,7 @@ def test_cnn(
         parquet_path = get_processed_parquet_path()
     
     # Look for final checkpoint with hyperparameters
-    final_ckpt_name = get_checkpoint_filename()
+    final_ckpt_name = get_checkpoint_filename(model_type="cnn")
     final_ckpt_path = os.path.join(model_dir, final_ckpt_name)
     
     if os.path.exists(final_ckpt_path):
@@ -925,6 +941,329 @@ def test_cnn(
         
         wandb_run.finish()
 
+class TransformerUrbanSound8KClassifier(torch.nn.Module):
+    """
+    Transformer encoder classifier for UrbanSound8K log-mel spectrograms.
+    Input shape: [batch_size, n_mels, n_frames]
+    """
+    def __init__(
+        self,
+        n_classes=10,
+        n_mels=N_MELS,
+        n_frames=None,  # Optionally specify for positional embedding
+        dim=TRANSFORMER_DIM,
+        depth=TRANSFORMER_LAYERS,
+        heads=TRANSFORMER_HEADS,
+        mlp_dim=TRANSFORMER_MLP_DIM,
+        dropout=TRANSFORMER_DROPOUT
+    ):
+        super().__init__()
+        # We'll infer n_frames at runtime if not provided
+        self.n_mels = n_mels
+        self.dim = dim
+
+        # Project each frame (n_mels) to transformer dim
+        self.input_proj = torch.nn.Linear(n_mels, dim)
+
+        # Positional encoding (learnable)
+        self.pos_embed = None
+        self.n_frames = n_frames
+
+        encoder_layer = torch.nn.TransformerEncoderLayer(
+            d_model=dim,
+            nhead=heads,
+            dim_feedforward=mlp_dim,
+            dropout=dropout,
+            activation='gelu',
+            batch_first=True
+        )
+        self.encoder = torch.nn.TransformerEncoder(encoder_layer, num_layers=depth)
+
+        self.dropout = torch.nn.Dropout(dropout)
+        self.norm = torch.nn.LayerNorm(dim)
+
+        # Classification head
+        self.head = torch.nn.Sequential(
+            torch.nn.Linear(dim, mlp_dim),
+            torch.nn.ReLU(),
+            torch.nn.Dropout(dropout),
+            torch.nn.Linear(mlp_dim, n_classes)
+        )
+
+    def forward(self, x):
+        """
+        Args:
+            x: [batch_size, n_mels, n_frames]
+        Returns:
+            logits: [batch_size, n_classes]
+        """
+        # Transpose to [batch, n_frames, n_mels]
+        x = x.transpose(1, 2)
+        B, T, _ = x.shape
+
+        # Project to transformer dimension
+        x = self.input_proj(x)  # [B, T, dim]
+
+        # Positional embedding (initialize if needed)
+        if (self.pos_embed is None) or (self.n_frames != T):
+            # Create learnable positional embedding for this sequence length
+            self.n_frames = T
+            self.pos_embed = torch.nn.Parameter(torch.zeros(1, T, self.dim, device=x.device))
+            torch.nn.init.trunc_normal_(self.pos_embed, std=0.02)
+
+        x = x + self.pos_embed  # [B, T, dim]
+        x = self.dropout(x)
+
+        # Transformer encoder
+        x = self.encoder(x)  # [B, T, dim]
+        x = self.norm(x)
+
+        # Pooling: mean over time
+        x = x.mean(dim=1)  # [B, dim]
+
+        logits = self.head(x)  # [B, n_classes]
+        return logits
+
+    def get_feature_embeddings(self, x):
+        # Returns the pooled transformer features before classification head
+        x = x.transpose(1, 2)
+        x = self.input_proj(x)
+        if (self.pos_embed is None) or (self.n_frames != x.shape[1]):
+            self.n_frames = x.shape[1]
+            self.pos_embed = torch.nn.Parameter(torch.zeros(1, self.n_frames, self.dim, device=x.device))
+            torch.nn.init.trunc_normal_(self.pos_embed, std=0.02)
+        x = x + self.pos_embed
+        x = self.dropout(x)
+        x = self.encoder(x)
+        x = self.norm(x)
+        return x.mean(dim=1)
+
+def train_transformer(
+    parquet_path=None,
+    model_dir=MODEL_ROOT,
+    batch_size=BATCH_SIZE,
+    epochs=EPOCHS,
+    lr=LR,
+    n_classes=10,
+    n_mels=N_MELS,
+    device=device
+):
+    if parquet_path is None:
+        parquet_path = get_processed_parquet_path()
+    run_name = "urbansound8K_transformer_classifier_x"
+    wandb_run = None
+    if WANDB_API_KEY and WANDB_ENTITY and WANDB_PROJECT:
+        wandb.login(key=WANDB_API_KEY)
+        wandb_run = wandb.init(
+            project=WANDB_PROJECT,
+            entity=WANDB_ENTITY,
+            name=run_name,
+            config={
+                "epochs": epochs,
+                "batch_size": batch_size,
+                "lr": lr,
+                "n_classes": n_classes,
+                "n_mels": n_mels,
+                "dropout": TRANSFORMER_DROPOUT,
+                "weight_decay": WEIGHT_DECAY,
+                "dim": TRANSFORMER_DIM,
+                "depth": TRANSFORMER_LAYERS,
+                "heads": TRANSFORMER_HEADS,
+                "mlp_dim": TRANSFORMER_MLP_DIM,
+            }
+        )
+    model = TransformerUrbanSound8KClassifier(
+        n_classes=n_classes,
+        n_mels=n_mels,
+        dropout=TRANSFORMER_DROPOUT
+    ).to(device)
+    
+    # Prepare data loaders
+    train_ds = UrbanSoundDataSet(parquet_path, folds=list(range(1, 9)))
+    eval_ds = UrbanSoundDataSet(parquet_path, folds=[9])
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, drop_last=True)
+    eval_loader = DataLoader(eval_ds, batch_size=batch_size, shuffle=False)
+    
+    # Optimizer and criterion
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=WEIGHT_DECAY)
+    criterion = torch.nn.CrossEntropyLoss()
+    
+    for epoch in range(epochs):
+        model.train()
+        total_loss = 0
+        with tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs} [Train]") as pbar:
+            for xb, yb in pbar:
+                xb, yb = xb.to(device), yb.to(device)
+                optimizer.zero_grad()
+                logits = model(xb)
+                loss = criterion(logits, yb)
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item() * xb.size(0)
+                pbar.set_postfix(loss=loss.item())
+        avg_loss = total_loss / len(train_loader.dataset)
+        logger.success(f"Epoch {epoch+1}: Train loss={avg_loss:.4f}")
+        
+        # Evaluate on fold 9
+        eval_results = eval_or_test_cnn(
+            model, eval_loader, eval_ds.df, device, n_classes, return_df=True, show_tqdm=True
+        )
+        
+        # Only save eval parquet on last epoch
+        if epoch == epochs - 1:
+            eval_out_path = os.path.join(
+                EVAL_PARQUET_PATH,
+                f"urbansound8k_eval_transformer_fold9_{epoch+1}.parquet"
+            )
+            os.makedirs(os.path.dirname(eval_out_path), exist_ok=True)
+            eval_results.to_parquet(eval_out_path, index=False)
+            logger.success(f"Saved eval results: {eval_out_path}")
+        
+        # Compute metrics
+        y_true = eval_results["class_id"].values
+        y_pred = eval_results["predicted_class_id"].values
+        eval_acc = accuracy_score(y_true, y_pred)
+        eval_prec = precision_score(y_true, y_pred, average="macro", zero_division=0)
+        eval_rec = recall_score(y_true, y_pred, average="macro", zero_division=0)
+        eval_f1 = f1_score(y_true, y_pred, average="macro", zero_division=0)
+        
+        logger.success(f"Epoch {epoch+1}: Eval Acc={eval_acc:.4f}, Prec={eval_prec:.4f}, Rec={eval_rec:.4f}, F1={eval_f1:.4f}")
+        
+        # Log to wandb
+        if wandb_run is not None:
+            wandb_run.log({
+                "epoch": epoch + 1,
+                "train_loss": avg_loss,
+                "eval_accuracy": eval_acc,
+                "eval_precision": eval_prec,
+                "eval_recall": eval_rec,
+                "eval_f1": eval_f1,
+            })
+    
+    # Save final checkpoint only after all epochs
+    final_ckpt_path = os.path.join(model_dir, get_checkpoint_filename(model_type="transformer"))
+    torch.save(model.state_dict(), final_ckpt_path)
+    logger.success(f"Saved final checkpoint: {final_ckpt_path}")
+
+def test_transformer(
+    parquet_path=None,
+    model_dir=MODEL_ROOT,
+    n_classes=10,
+    n_mels=N_MELS,
+    device=device
+):
+    if parquet_path is None:
+        parquet_path = get_processed_parquet_path()
+    
+    # Look for final checkpoint with hyperparameters
+    final_ckpt_name = get_checkpoint_filename(model_type="transformer")
+    final_ckpt_path = os.path.join(model_dir, final_ckpt_name)
+    
+    if os.path.exists(final_ckpt_path):
+        ckpt_path = final_ckpt_path
+        logger.success(f"Loading final checkpoint: {ckpt_path}")
+    else:
+        # Fallback to old naming pattern if new one doesn't exist
+        checkpoints = [
+            f for f in os.listdir(model_dir)
+            if f.endswith("_urbansound8k_cnn.pt")
+        ]
+        if not checkpoints:
+            logger.error("No checkpoints found for testing.")
+            return
+        last_ckpt = sorted(checkpoints, key=lambda x: int(x.split("_")[0]))[-1]
+        ckpt_path = os.path.join(model_dir, last_ckpt)
+        logger.success(f"Loading checkpoint: {ckpt_path}")
+    
+    test_ds = UrbanSoundDataSet(parquet_path, folds=[10])
+    test_loader = DataLoader(test_ds, batch_size=64, shuffle=False)
+    model = TransformerUrbanSound8KClassifier(n_classes=n_classes, n_mels=n_mels, dropout=TRANSFORMER_DROPOUT).to(device)
+    # Ignore unexpected keys like pos_embed when loading
+    model.load_state_dict(torch.load(ckpt_path, map_location=device), strict=False)
+    
+    # Run test with tqdm
+    test_results = eval_or_test_cnn(
+        model, test_loader, test_ds.df, device, n_classes, return_df=True, show_tqdm=True
+    )
+    test_out_path = get_test_parquet_path()
+    os.makedirs(os.path.dirname(test_out_path), exist_ok=True)
+    test_results.to_parquet(test_out_path, index=False)
+    logger.success(f"Saved test results: {test_out_path}")
+    
+    # Compute detailed metrics
+    y_true = test_results["class_id"].values
+    y_pred = test_results["predicted_class_id"].values
+    
+    # UrbanSound8K class names
+    class_names = [
+        "air_conditioner", "car_horn", "children_playing", "dog_bark", "drilling",
+        "engine_idling", "gun_shot", "jackhammer", "siren", "street_music"
+    ]
+    
+    detailed_metrics = compute_detailed_metrics(y_true, y_pred, class_names)
+    
+    # Print detailed results
+    logger.success(f"🎯 Test Results:")
+    logger.success(f"   Accuracy: {detailed_metrics['accuracy']:.4f}")
+    logger.success(f"   Precision (macro): {detailed_metrics['precision_macro']:.4f}")
+    logger.success(f"   Recall (macro): {detailed_metrics['recall_macro']:.4f}")
+    logger.success(f"   F1-score (macro): {detailed_metrics['f1_macro']:.4f}")
+    logger.success(f"   Precision (weighted): {detailed_metrics['precision_weighted']:.4f}")
+    logger.success(f"   Recall (weighted): {detailed_metrics['recall_weighted']:.4f}")
+    logger.success(f"   F1-score (weighted): {detailed_metrics['f1_weighted']:.4f}")
+    
+    # Print classification report
+    logger.info(f"📋 Classification Report:")
+    print(detailed_metrics['classification_report'])
+    
+    # Save confusion matrix inside Eval folder with hyperparameter info.
+    cm_filename = f"confusion_matrix_{os.path.basename(ckpt_path)[:-3]}.png"
+    cm_path = os.path.join(EVAL_PARQUET_PATH, cm_filename)
+    plot_confusion_matrix(y_true, y_pred, class_names, save_path=cm_path, normalize=True)
+
+    if WANDB_API_KEY and WANDB_ENTITY and WANDB_PROJECT:
+        wandb.login(key=WANDB_API_KEY)
+        wandb_run = wandb.init(
+            project=WANDB_PROJECT,
+            entity=WANDB_ENTITY,
+            name="urbansound8K_transformer_classifier_test",
+            config={
+                "test_checkpoint": os.path.basename(ckpt_path),
+                "n_classes": n_classes,
+                "n_mels": n_mels,
+                "dropout": TRANSFORMER_DROPOUT,
+                "weight_decay": WEIGHT_DECAY,
+                "dim": TRANSFORMER_DIM,
+                "depth": TRANSFORMER_LAYERS,
+                "heads": TRANSFORMER_HEADS,
+                "mlp_dim": TRANSFORMER_MLP_DIM,
+            }
+        )
+        
+        # Log all metrics to wandb
+        wandb_run.log({
+            "test_accuracy": detailed_metrics['accuracy'],
+            "test_precision_macro": detailed_metrics['precision_macro'],
+            "test_recall_macro": detailed_metrics['recall_macro'],
+            "test_f1_macro": detailed_metrics['f1_macro'],
+            "test_precision_weighted": detailed_metrics['precision_weighted'],
+            "test_recall_weighted": detailed_metrics['recall_weighted'],
+            "test_f1_weighted": detailed_metrics['f1_weighted'],
+        })
+        
+        # Log per-class metrics
+        for i, class_name in enumerate(class_names):
+            wandb_run.log({
+                f"test_precision_{class_name}": detailed_metrics['precision_per_class'][i],
+                f"test_recall_{class_name}": detailed_metrics['recall_per_class'][i],
+                f"test_f1_{class_name}": detailed_metrics['f1_per_class'][i],
+            })
+        
+        # Log confusion matrix as image
+        wandb_run.log({"confusion_matrix": wandb.Image(cm_path)})
+        
+        wandb_run.finish()
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="UrbanSound8K Preprocessing and Visualization")
     parser.add_argument("--preprocess", action="store_true", help="Preprocess dataset to Parquet")
@@ -932,6 +1271,8 @@ if __name__ == "__main__":
     parser.add_argument("--sample-spectrogram", action="store_true", help="Export sample spectrogram images for each class")
     parser.add_argument("--train-cnn", action="store_true", help="Train CNN on folds 1-8, eval on fold 9")
     parser.add_argument("--test-cnn", action="store_true", help="Test CNN on fold 10 using last checkpoint")
+    parser.add_argument("--train-transformer", action="store_true", help="Train Transformer on folds 1-8, eval on fold 9")
+    parser.add_argument("--test-transformer", action="store_true", help="Test Transformer on fold 10 using last checkpoint")
     args = parser.parse_args()
 
     if args.preprocess:
@@ -944,5 +1285,9 @@ if __name__ == "__main__":
         train_cnn()
     if getattr(args, 'test_cnn'):
         test_cnn()
-    elif not any([args.preprocess, getattr(args, 'sample_waveform'), getattr(args, 'sample_spectrogram'), getattr(args, 'train_cnn'), getattr(args, 'test_cnn')]):
+    if getattr(args, 'train_transformer'):
+        train_transformer()
+    if getattr(args, 'test_transformer'):
+        test_transformer()
+    elif not any([args.preprocess, getattr(args, 'sample_waveform'), getattr(args, 'sample_spectrogram'), getattr(args, 'train_cnn'), getattr(args, 'test_cnn'), getattr(args, 'train_transformer'), getattr(args, 'test_transformer')]):
         logger.error("No action specified. Use --help for options.")
