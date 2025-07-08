@@ -1,1 +1,0 @@
-{"eval_precision":0.6495816790971076,"_step":9,"_runtime":24,"eval_recall":0.6648398887454804,"eval_accuracy":0.6200980392156863,"_timestamp":1.7519121097481961e+09,"_wandb":{"runtime":24},"epoch":10,"train_loss":0.8767820391417189}
