@@ -945,6 +945,7 @@ class TransformerUrbanSound8KClassifier(torch.nn.Module):
     """
     Transformer encoder classifier for UrbanSound8K log-mel spectrograms.
     Input shape: [batch_size, n_mels, n_frames]
+    Uses a CLS token for classification.
     """
     def __init__(
         self,
@@ -965,7 +966,11 @@ class TransformerUrbanSound8KClassifier(torch.nn.Module):
         # Project each frame (n_mels) to transformer dim
         self.input_proj = torch.nn.Linear(n_mels, dim)
 
-        # Positional encoding (learnable)
+        # Learnable CLS token
+        self.cls_token = torch.nn.Parameter(torch.zeros(1, 1, dim))
+        torch.nn.init.trunc_normal_(self.cls_token, std=0.02)
+
+        # Positional encoding (learnable) - now includes CLS token position
         self.pos_embed = None
         self.n_frames = n_frames
 
@@ -982,7 +987,7 @@ class TransformerUrbanSound8KClassifier(torch.nn.Module):
         self.dropout = torch.nn.Dropout(dropout)
         self.norm = torch.nn.LayerNorm(dim)
 
-        # Classification head
+        # Classification head - now uses CLS token output
         self.head = torch.nn.Sequential(
             torch.nn.Linear(dim, mlp_dim),
             torch.nn.ReLU(),
@@ -1004,39 +1009,52 @@ class TransformerUrbanSound8KClassifier(torch.nn.Module):
         # Project to transformer dimension
         x = self.input_proj(x)  # [B, T, dim]
 
-        # Positional embedding (initialize if needed)
+        # Expand CLS token for batch
+        cls_tokens = self.cls_token.expand(B, -1, -1)  # [B, 1, dim]
+        
+        # Prepend CLS token to sequence
+        x = torch.cat([cls_tokens, x], dim=1)  # [B, T+1, dim]
+
+        # Positional embedding (initialize if needed) - now includes CLS position
         if (self.pos_embed is None) or (self.n_frames != T):
-            # Create learnable positional embedding for this sequence length
+            # Create learnable positional embedding for CLS + sequence length
             self.n_frames = T
-            self.pos_embed = torch.nn.Parameter(torch.zeros(1, T, self.dim, device=x.device))
+            self.pos_embed = torch.nn.Parameter(torch.zeros(1, T + 1, self.dim, device=x.device))
             torch.nn.init.trunc_normal_(self.pos_embed, std=0.02)
 
-        x = x + self.pos_embed  # [B, T, dim]
+        x = x + self.pos_embed  # [B, T+1, dim]
         x = self.dropout(x)
 
         # Transformer encoder
-        x = self.encoder(x)  # [B, T, dim]
+        x = self.encoder(x)  # [B, T+1, dim]
         x = self.norm(x)
 
-        # Pooling: mean over time
-        x = x.mean(dim=1)  # [B, dim]
+        # Use CLS token (first token) for classification
+        cls_output = x[:, 0]  # [B, dim]
 
-        logits = self.head(x)  # [B, n_classes]
+        logits = self.head(cls_output)  # [B, n_classes]
         return logits
 
     def get_feature_embeddings(self, x):
-        # Returns the pooled transformer features before classification head
+        # Returns the CLS token features before classification head
         x = x.transpose(1, 2)
+        B, T, _ = x.shape
         x = self.input_proj(x)
-        if (self.pos_embed is None) or (self.n_frames != x.shape[1]):
-            self.n_frames = x.shape[1]
-            self.pos_embed = torch.nn.Parameter(torch.zeros(1, self.n_frames, self.dim, device=x.device))
+        
+        cls_tokens = self.cls_token.expand(B, -1, -1)
+        x = torch.cat([cls_tokens, x], dim=1)
+        
+        if (self.pos_embed is None) or (self.n_frames != T):
+            self.n_frames = T
+            self.pos_embed = torch.nn.Parameter(torch.zeros(1, T + 1, self.dim, device=x.device))
             torch.nn.init.trunc_normal_(self.pos_embed, std=0.02)
+        
         x = x + self.pos_embed
         x = self.dropout(x)
         x = self.encoder(x)
         x = self.norm(x)
-        return x.mean(dim=1)
+        
+        return x[:, 0]  # Return CLS token features
 
 def train_transformer(
     parquet_path=None,
