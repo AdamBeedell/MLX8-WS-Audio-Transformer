@@ -8,7 +8,8 @@ import torch  # base ML library
 
 import transformers # huggingface transformers library
 from transformers import WhisperForConditionalGeneration, WhisperProcessor, WhisperFeatureExtractor, WhisperTokenizer # Openai whisper stuff ## dont really need the last 2 except for test block
-from transformers import DataCollatorSpeechSeq2SeqWithPadding, Seq2SeqTrainingArguments, Seq2SeqTrainer # generic sequence to sequence stuff - Here the audio counts as a sequence as does the transcription as they're both in time. usually images wouldnt be appropriate, but our image conversion preserves time.
+from transformers import Seq2SeqTrainingArguments, Seq2SeqTrainer # generic sequence to sequence stuff - Here the audio counts as a sequence as does the transcription as they're both in time. usually images wouldnt be appropriate, but our image conversion preserves time.
+import datasets
 from datasets import Audio, dataset_dict # HF datasets library
 import evaluate # HF evaluation library for loss functions and metrics
 import huggingface_hub # HF logins and training functions
@@ -17,6 +18,12 @@ import wandb # weights and biases for saving and logging modols and metrics\
 
 import os # refer to local files
 import pathlib # also refer to local files, may not need
+
+from dataclasses import dataclass
+from typing import Any, Dict, List, Union
+
+import accelerate
+
 
 
 ## Testing block
@@ -68,7 +75,7 @@ for item in pathlib.Path("Data/Memos").glob("*.wav"):
 ## list to dataset
 
 #data = list(data.values())  # just grab the values
-dataset = Dataset.from_list(data)
+dataset = datasets.Dataset.from_list(data)
 
 ## dataset to dataset with proper audio column
 dataset = dataset.cast_column("audio", Audio(sampling_rate=16000))
@@ -88,6 +95,28 @@ def prepare_dataset(batch):   #### This is a bit misleading, should occur across
 dataset = dataset.map(prepare_dataset, remove_columns=["audio", "sentence"])  ## Does the function above, makes 2 new NN readable columns, drop the human ones
 
 ## dataset to dataset with batches
+
+@dataclass
+class DataCollatorSpeechSeq2SeqWithPadding:
+    processor: Any
+    decoder_start_token_id: int
+
+    def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
+        # separate inputs and labels
+        input_features = [{"input_features": f["input_features"]} for f in features]
+        batch = self.processor.feature_extractor.pad(input_features, return_tensors="pt")
+
+        label_features = [{"input_ids": f["labels"]} for f in features]
+        labels_batch = self.processor.tokenizer.pad(label_features, return_tensors="pt")
+
+        labels = labels_batch["input_ids"].masked_fill(labels_batch.attention_mask.ne(1), -100)
+
+        if (labels[:, 0] == self.decoder_start_token_id).all().cpu().item():
+            labels = labels[:, 1:]
+
+        batch["labels"] = labels
+        return batch
+
 
 data_collator = DataCollatorSpeechSeq2SeqWithPadding(
     processor=processor,
@@ -138,7 +167,7 @@ training_args = Seq2SeqTrainingArguments(
     warmup_steps=1,
     max_steps=50,
     gradient_checkpointing=True,
-    fp16=True,
+    fp16=False,
     evaluation_strategy="steps",
     per_device_eval_batch_size=8,
     predict_with_generate=True,
