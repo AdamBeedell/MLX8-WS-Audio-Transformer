@@ -1,5 +1,13 @@
 # DuckDB SQL Queries for UrbanSound8K Dataset
 
+## Reference Links
+- 86% CNN 1D: https://www.kaggle.com/code/prabhavsingh/urbansound8k-classification
+- 80%: https://www.kaggle.com/code/nandana19nxny/speech-casestudy-audioclassification
+- 98.05%: https://github.com/gitmehrdad/face 
+        Paper: https://arxiv.org/pdf/2303.03666
+- 75.4% vs 84.9%: 1D vs 2D: https://github.com/CVxTz/audio_classification
+        Medium: https://medium.com/@CVxTz/audio-classification-a-convolutional-neural-network-approach-b0a4fce8f6c
+
 ## Comparison to OpenAI Whiper 
 
 Refer to ../course-materials/mlx_week5_catchup_shapes.pdf
