@@ -30,6 +30,56 @@
             "console": "integratedTerminal",
             "python": "${workspaceFolder}/.charles/.venv/bin/python",
             "cwd": "${workspaceFolder}/.charles"
+        },
+        {
+            "name": "Debug preprocess_data.py --midi2wav",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/.charles/music2midi/preprocess_data.py",
+            "args": ["--midi2wav"],
+            "console": "integratedTerminal",
+            "python": "${workspaceFolder}/.charles/.venv/bin/python",
+            "cwd": "${workspaceFolder}/.charles/music2midi"
+        },
+        {
+            "name": "Debug preprocess_data.py --midi2abc",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/.charles/music2midi/preprocess_data.py",
+            "args": ["--midi2abc"],
+            "console": "integratedTerminal",
+            "python": "${workspaceFolder}/.charles/.venv/bin/python",
+            "cwd": "${workspaceFolder}/.charles/music2midi"
+        },
+        {
+            "name": "Debug preprocess_data.py --gentokens",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/.charles/music2midi/preprocess_data.py",
+            "args": ["--gentokens"],
+            "console": "integratedTerminal",
+            "python": "${workspaceFolder}/.charles/.venv/bin/python",
+            "cwd": "${workspaceFolder}/.charles/music2midi"
+        },
+        {
+            "name": "Debug preprocess_data.py --genparquent",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/.charles/music2midi/preprocess_data.py",
+            "args": ["--genparquent"],
+            "console": "integratedTerminal",
+            "python": "${workspaceFolder}/.charles/.venv/bin/python",
+            "cwd": "${workspaceFolder}/.charles/music2midi"
+        },
+        {
+            "name": "Debug preprocess_data.py --full",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/.charles/music2midi/preprocess_data.py",
+            "args": ["--full"],
+            "console": "integratedTerminal",
+            "python": "${workspaceFolder}/.charles/.venv/bin/python",
+            "cwd": "${workspaceFolder}/.charles/music2midi"
         }
     ]
 }
