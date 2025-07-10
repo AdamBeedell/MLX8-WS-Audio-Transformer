@@ -52,31 +52,31 @@
             "cwd": "${workspaceFolder}/.charles/music2midi"
         },
         {
-            "name": "Debug preprocess_data.py --gentokens",
+            "name": "Debug preprocess_data.py --gentokens-raw",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/.charles/music2midi/preprocess_data.py",
-            "args": ["--gentokens"],
+            "args": ["--gentokens-raw"],
             "console": "integratedTerminal",
             "python": "${workspaceFolder}/.charles/.venv/bin/python",
             "cwd": "${workspaceFolder}/.charles/music2midi"
         },
         {
-            "name": "Debug preprocess_data.py --genparquent",
+            "name": "Debug preprocess_data.py --gentokens-bpe",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/.charles/music2midi/preprocess_data.py",
-            "args": ["--genparquent"],
+            "args": ["--gentokens-bpe"],
             "console": "integratedTerminal",
             "python": "${workspaceFolder}/.charles/.venv/bin/python",
             "cwd": "${workspaceFolder}/.charles/music2midi"
         },
         {
-            "name": "Debug preprocess_data.py --full",
+            "name": "Debug preprocess_data.py --genparquet",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/.charles/music2midi/preprocess_data.py",
-            "args": ["--full"],
+            "args": ["--genparquet"],
             "console": "integratedTerminal",
             "python": "${workspaceFolder}/.charles/.venv/bin/python",
             "cwd": "${workspaceFolder}/.charles/music2midi"
@@ -90,6 +90,15 @@
             "console": "integratedTerminal",
             "python": "${workspaceFolder}/.charles/.venv/bin/python",
             "cwd": "${workspaceFolder}/.charles/music2midi/test"
+        },
+        {
+            "name": "Debug train.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/.charles/music2midi/train.py",
+            "console": "integratedTerminal",
+            "python": "${workspaceFolder}/.charles/.venv/bin/python",
+            "cwd": "${workspaceFolder}/.charles/music2midi"
         }
     ]
 }

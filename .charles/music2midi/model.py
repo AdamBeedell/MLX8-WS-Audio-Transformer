@@ -3,10 +3,17 @@
 import os
 import torch
 import torch.nn as nn
+import numpy as np
+import logging
+from typing import List, Optional, Union
 from dotenv import load_dotenv
 from transformers import WhisperProcessor, WhisperModel, AutoTokenizer, AutoModelForCausalLM
+import colorlog
 
 load_dotenv()
+
+# Setup logger (same as in train.py)
+logger = colorlog.getLogger(__name__)
 
 WHISPER_MODEL_NAME = os.getenv("WHISPER_MODEL", "openai/whisper-base")
 QWEN_MODEL_NAME = os.getenv("QWEN_MODEL", "Qwen/Qwen3-0.6B-Base")
@@ -20,51 +27,185 @@ class WhisperAudioEncoder(nn.Module):
     """
     def __init__(self, model_name=WHISPER_MODEL_NAME, freeze_encoder=True):
         super().__init__()
-        print(f"Loading Whisper model: {model_name}")
+        logger.info(f"Loading Whisper model: {model_name}")
         self.processor = WhisperProcessor.from_pretrained(model_name)
         whisper_model = WhisperModel.from_pretrained(model_name)
         self.encoder = whisper_model.get_encoder()
 
         if freeze_encoder:
-            print("Freezing Whisper encoder weights.")
+            logger.info("Freezing Whisper encoder weights.")
             for param in self.encoder.parameters():
                 param.requires_grad = False
         
         self.encoder.eval() # Set encoder to evaluation mode
 
-    def forward(self, waveform: torch.Tensor, sampling_rate: int) -> torch.Tensor:
+    def forward(self, waveforms: Union[torch.Tensor, List[np.ndarray]], sampling_rate: int) -> torch.Tensor:
         """
-        Takes a raw audio waveform and returns a sequence of hidden states.
+        Takes raw audio waveforms and returns a sequence of hidden states.
+        Args:
+            waveforms: Either a batch tensor or list of numpy arrays
+            sampling_rate: Audio sampling rate
         """
-        # The processor handles spectrogram conversion, padding, and normalization.
-        inputs = self.processor(
-            waveform, 
-            sampling_rate=sampling_rate, 
-            return_tensors="pt"
-        )
-        input_features = inputs.input_features.to(self.encoder.device)
-        
-        # We don't need gradients for the frozen encoder.
-        with torch.no_grad():
-            encoder_outputs = self.encoder(input_features)
+        # Handle different input formats
+        if isinstance(waveforms, list):
+            # Convert list of numpy arrays to batch tensor
+            batch_waveforms = []
+            for wf in waveforms:
+                if isinstance(wf, np.ndarray):
+                    wf_tensor = torch.from_numpy(wf).float()
+                else:
+                    wf_tensor = wf.float()
+                
+                # Ensure waveform is 1D (mono)
+                if len(wf_tensor.shape) > 1:
+                    # If stereo or multi-channel, convert to mono by averaging
+                    wf_tensor = wf_tensor.mean(dim=0)
+                
+                batch_waveforms.append(wf_tensor)
             
-        return encoder_outputs.last_hidden_state
+            # Find the maximum length for padding
+            max_len = max(w.shape[0] for w in batch_waveforms)
+            
+            # Pad all waveforms to the same length
+            padded_waveforms = []
+            for w in batch_waveforms:
+                if w.shape[0] < max_len:
+                    padding_length = max_len - w.shape[0]
+                    padding = torch.zeros(padding_length, dtype=w.dtype)
+                    w = torch.cat([w, padding], dim=0)
+                padded_waveforms.append(w)
+            
+            # Stack into batch tensor [batch_size, max_length]
+            waveforms = torch.stack(padded_waveforms, dim=0)
+        
+        # Ensure waveforms is 2D: [batch_size, sequence_length]
+        if len(waveforms.shape) == 1:
+            waveforms = waveforms.unsqueeze(0)  # Add batch dimension
+        elif len(waveforms.shape) > 2:
+            # If multi-channel, convert to mono
+            waveforms = waveforms.mean(dim=-1)
+        
+        # Convert to numpy for Whisper processor (it expects numpy arrays)
+        if isinstance(waveforms, torch.Tensor):
+            waveforms_np = waveforms.detach().cpu().numpy()
+        else:
+            waveforms_np = waveforms
+        
+        # Process each waveform in the batch separately to avoid shape issues
+        batch_features = []
+        for i in range(waveforms_np.shape[0]):
+            single_waveform = waveforms_np[i]
+            
+            # Process with Whisper processor
+            inputs = self.processor(
+                single_waveform, 
+                sampling_rate=sampling_rate, 
+                return_tensors="pt"
+            )
+            input_features = inputs.input_features.to(self.encoder.device)
+            
+            # Extract features with frozen encoder
+            with torch.no_grad() if self.training else torch.enable_grad():
+                encoder_outputs = self.encoder(input_features)
+                batch_features.append(encoder_outputs.last_hidden_state)
+        
+        # Concatenate all features along batch dimension
+        if len(batch_features) == 1:
+            audio_features = batch_features[0]
+        else:
+            audio_features = torch.cat(batch_features, dim=0)
+        
+        # Convert to the same dtype as the encoder (likely bfloat16 for efficiency)
+        # Get the dtype from the encoder's first parameter
+        target_dtype = next(self.encoder.parameters()).dtype
+        audio_features = audio_features.to(dtype=target_dtype)
+        
+        return audio_features
+
+class CrossAttentionAdapter(nn.Module):
+    """
+    Cross-attention adapter to connect Whisper encoder output to Qwen decoder.
+    This enables the Qwen model to attend to audio features.
+    """
+    def __init__(self, audio_dim: int, text_dim: int, num_heads: int = 8, dtype=None):
+        super().__init__()
+        self.audio_dim = audio_dim
+        self.text_dim = text_dim
+        self.num_heads = num_heads
+        self.dtype = dtype or torch.float32
+        
+        # Project audio features to text dimension
+        self.audio_projection = nn.Linear(audio_dim, text_dim, dtype=self.dtype)
+        
+        # Cross-attention layer
+        self.cross_attention = nn.MultiheadAttention(
+            embed_dim=text_dim,
+            num_heads=num_heads,
+            batch_first=True,
+            dtype=self.dtype
+        )
+        
+        # Layer norm and feedforward
+        self.layer_norm1 = nn.LayerNorm(text_dim, dtype=self.dtype)
+        self.layer_norm2 = nn.LayerNorm(text_dim, dtype=self.dtype)
+        self.feedforward = nn.Sequential(
+            nn.Linear(text_dim, text_dim * 4, dtype=self.dtype),
+            nn.GELU(),
+            nn.Linear(text_dim * 4, text_dim, dtype=self.dtype)
+        )
+        
+    def forward(self, text_embeddings: torch.Tensor, audio_features: torch.Tensor) -> torch.Tensor:
+        """
+        Apply cross-attention between text embeddings and audio features.
+        Args:
+            text_embeddings: [batch, seq_len, text_dim] from Qwen
+            audio_features: [batch, audio_seq_len, audio_dim] from Whisper
+        """
+        # Ensure both inputs have the same dtype
+        target_dtype = text_embeddings.dtype
+        audio_features = audio_features.to(dtype=target_dtype)
+        
+        # Project audio features to text dimension
+        audio_projected = self.audio_projection(audio_features)  # [batch, audio_seq_len, text_dim]
+        
+        # Ensure projected audio has same dtype as text embeddings
+        audio_projected = audio_projected.to(dtype=target_dtype)
+        
+        # Cross-attention: text queries attend to audio keys/values
+        attended_text, _ = self.cross_attention(
+            query=text_embeddings,
+            key=audio_projected,
+            value=audio_projected
+        )
+        
+        # Residual connection and layer norm
+        text_embeddings = self.layer_norm1(text_embeddings + attended_text)
+        
+        # Feedforward with residual
+        ff_output = self.feedforward(text_embeddings)
+        text_embeddings = self.layer_norm2(text_embeddings + ff_output)
+        
+        return text_embeddings
 
 class MusicTranscriptionModel(nn.Module):
     """
     The main Encoder-Decoder model for music transcription.
     """
-    def __init__(self):
+    def __init__(self, tokenizer=None):
         super().__init__()
         
         # Tower 1: The Audio Encoder
         self.audio_encoder = WhisperAudioEncoder()
         
-        # Tower 2: The Text Decoder
-        print(f"Loading custom ABC tokenizer from: {TOKENIZER_DIR}")
-        self.tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_DIR, trust_remote_code=True)
+        # Tower 2: The Text Decoder - use provided tokenizer or load custom one
+        if tokenizer is not None:
+            logger.info("Using provided tokenizer")
+            self.tokenizer = tokenizer
+        else:
+            logger.info(f"Loading custom ABC tokenizer from: {TOKENIZER_DIR}")
+            self.tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_DIR, trust_remote_code=True)
         
-        print(f"Loading Qwen model: {QWEN_MODEL_NAME}")
+        logger.info(f"Loading Qwen model: {QWEN_MODEL_NAME}")
         self.text_decoder = AutoModelForCausalLM.from_pretrained(
             QWEN_MODEL_NAME,
             trust_remote_code=True,
@@ -73,15 +214,37 @@ class MusicTranscriptionModel(nn.Module):
         
         # ** CRITICAL STEP **
         # Resize token embeddings to match our extended ABC vocabulary
-        self.text_decoder.resize_token_embeddings(len(self.tokenizer))
-        print(f"Resized Qwen token embeddings to: {len(self.tokenizer)}")
+        original_vocab_size = self.text_decoder.config.vocab_size
+        new_vocab_size = len(self.tokenizer)
+        
+        if new_vocab_size != original_vocab_size:
+            self.text_decoder.resize_token_embeddings(new_vocab_size)
+            logger.info(f"Resized Qwen token embeddings: {original_vocab_size} → {new_vocab_size}")
+        else:
+            logger.info(f"Qwen vocabulary size matches tokenizer: {new_vocab_size}")
+
+        # Get dimensions and dtype for cross-attention adapter
+        audio_dim = self.audio_encoder.encoder.config.d_model  # Whisper hidden size
+        text_dim = self.text_decoder.config.hidden_size  # Qwen hidden size
+        
+        # Get the dtype from the text decoder to ensure consistency
+        text_decoder_dtype = next(self.text_decoder.parameters()).dtype
+        logger.info(f"Text decoder using dtype: {text_decoder_dtype}")
+        
+        # Cross-attention adapter to connect audio and text with matching dtype
+        self.cross_attention_adapter = CrossAttentionAdapter(
+            audio_dim=audio_dim,
+            text_dim=text_dim,
+            num_heads=8,
+            dtype=text_decoder_dtype
+        )
 
         # Freeze all Qwen parameters initially
         for param in self.text_decoder.parameters():
             param.requires_grad = False
             
         # Unfreeze the cross-attention layers and top K decoder layers
-        print(f"Unfreezing the top {TOP_K_QWEN_LAYERS} Qwen decoder layers for fine-tuning.")
+        logger.info(f"Unfreezing the top {TOP_K_QWEN_LAYERS} Qwen decoder layers for fine-tuning.")
         for i, layer in enumerate(self.text_decoder.model.layers):
             if i >= (len(self.text_decoder.model.layers) - TOP_K_QWEN_LAYERS):
                 for param in layer.parameters():
@@ -92,19 +255,32 @@ class MusicTranscriptionModel(nn.Module):
             param.requires_grad = True
         for param in self.text_decoder.lm_head.parameters():
             param.requires_grad = True
+            
+        # Cross-attention adapter is trainable
+        for param in self.cross_attention_adapter.parameters():
+            param.requires_grad = True
 
-    def forward(self, waveform: List[np.ndarray], sampling_rate: int, 
+    def forward(self, waveforms: Union[List[np.ndarray], torch.Tensor], sampling_rate: int, 
                 target_token_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         """
         The main forward pass for training.
         """
-        encoder_hidden_states = self.audio_encoder(waveform, sampling_rate)
+        # Get audio features from Whisper encoder
+        audio_features = self.audio_encoder(waveforms, sampling_rate)
         
-        # The Qwen model becomes a decoder when `encoder_hidden_states` is provided.
+        # Get text embeddings from Qwen
+        text_embeddings = self.text_decoder.model.embed_tokens(target_token_ids)
+        
+        # Ensure audio features match text embeddings dtype
+        audio_features = audio_features.to(dtype=text_embeddings.dtype)
+        
+        # Apply cross-attention to fuse audio and text
+        fused_embeddings = self.cross_attention_adapter(text_embeddings, audio_features)
+        
+        # Forward through Qwen with fused embeddings
         outputs = self.text_decoder(
-            input_ids=target_token_ids,
+            inputs_embeds=fused_embeddings,
             attention_mask=attention_mask,
-            encoder_hidden_states=encoder_hidden_states,
             labels=target_token_ids, # The model handles shifting labels for loss calculation
             return_dict=True
         )
@@ -118,27 +294,48 @@ class MusicTranscriptionModel(nn.Module):
         """
         self.eval() # Set model to evaluation mode
         
-        # The audio encoder expects a list of waveforms, even for a single sample.
-        encoder_hidden_states = self.audio_encoder([waveform], sampling_rate)
+        # Get audio features
+        audio_features = self.audio_encoder([waveform], sampling_rate)
         
-        # Generate token IDs autoregressively.
-        # We start generation from the BOS token.
+        # Start generation from the BOS token
         decoder_start_token_id = self.tokenizer.bos_token_id
         if decoder_start_token_id is None:
              decoder_start_token_id = self.tokenizer.eos_token_id
 
         input_ids = torch.tensor([[decoder_start_token_id]], dtype=torch.long, device=self.text_decoder.device)
-
-        generated_ids = self.text_decoder.generate(
-            input_ids=input_ids,
-            encoder_hidden_states=encoder_hidden_states,
-            max_new_tokens=max_new_tokens,
-            do_sample=True,
-            top_p=0.9,
-            temperature=0.7,
-            eos_token_id=self.tokenizer.eos_token_id,
-            pad_token_id=self.tokenizer.pad_token_id or self.tokenizer.eos_token_id
-        )
         
-        # Decode the generated token IDs into a string.
-        return self.tokenizer.decode(generated_ids[0], skip_special_tokens=True)
+        # Generate autoregressively with cross-attention
+        generated_tokens = []
+        current_input_ids = input_ids
+        
+        for _ in range(max_new_tokens):
+            # Get text embeddings
+            text_embeddings = self.text_decoder.model.embed_tokens(current_input_ids)
+            
+            # Ensure audio features match text embeddings dtype
+            audio_features = audio_features.to(dtype=text_embeddings.dtype)
+            
+            # Apply cross-attention
+            fused_embeddings = self.cross_attention_adapter(text_embeddings, audio_features)
+            
+            # Forward pass
+            outputs = self.text_decoder(
+                inputs_embeds=fused_embeddings,
+                return_dict=True
+            )
+            
+            # Get next token
+            next_token_logits = outputs.logits[:, -1, :]
+            next_token_id = torch.multinomial(torch.softmax(next_token_logits / 0.7, dim=-1), 1)
+            
+            # Check for EOS
+            if next_token_id.item() == self.tokenizer.eos_token_id:
+                break
+                
+            generated_tokens.append(next_token_id.item())
+            
+            # Update input for next iteration
+            current_input_ids = torch.cat([current_input_ids, next_token_id], dim=1)
+        
+        # Decode the generated tokens
+        return self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
