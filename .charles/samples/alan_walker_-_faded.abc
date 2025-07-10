@@ -1,0 +1,134 @@
+X: 1
+T: from alan_walker_-_faded.mid
+M: 4/4
+L: 1/8
+Q:1/4=100
+K:C % 0 sharps
+V:1
+%%clef treble
+%%MIDI program 0
+%%MIDI program 0
+%%MIDI program 0
+%%MIDI program 0
+%%MIDI program 0
+[^F^D,]^A, [FF,]A, [FD,]A, [AF,]A,| \
+[^dB,,]^F, [dD,]F, [dB,,]F, [^cD,]F,| \
+[^A^F,]^C [AA,]C [AF,]C [AA,]C| \
+[F^C,]^G, [FF,]G, [FC,]G, [^DF,]G,|
+[^F^D,D,,-][^A,D,,-] [FF,D,,-][A,D,,-] [FD,D,,-][A,D,,-] [AF,D,,-][A,D,,]| \
+[^dB,,B,,,-][^F,B,,,-] [dD,B,,,-][F,B,,,-] [dB,,B,,,-][F,B,,,-] [^cD,B,,,-][F,B,,,]| \
+[^A^F,F,,,-][^CF,,,-] [AA,F,,,-][CF,,,-] [AF,F,,,-][CF,,,-] [AA,F,,,-][CF,,,]| \
+[F^C,C,,-][^G,C,,-] [FF,C,,-][G,C,,-] [FC,C,,-][G,C,,-] [^DF,C,,-][G,C,,]|
+[^F^D,D,,-][^A,D,,-] [FF,D,,-][A,D,,-] [FD,D,,-][A,D,,-] [AF,D,,-][A,D,,]| \
+[^dB,,B,,,-][^F,B,,,-] [dD,B,,,-][F,B,,,-] [dB,,B,,,-][F,B,,,-] [^cD,B,,,-][F,B,,,]| \
+[^A^F,F,,,-][^CF,,,-] [AA,F,,,-][CF,,,-] [AF,F,,,-][CF,,,-] [AA,F,,,-][CF,,,]| \
+[F^C,C,,-][^G,C,,-] [FF,C,,-][G,C,,-] [FC,C,,-][G,C,,-] [^DF,C,,-][G,C,,]|
+%%MIDI program 0
+%%MIDI program 0
+%%MIDI program 0
+V:2
+%%MIDI program 81
+z8| \
+z8| \
+z8| \
+z8|
+z8| \
+z8| \
+z8| \
+z8|
+z8| \
+z8| \
+z8| \
+z8|
+%%MIDI program 81
+%%MIDI program 81
+%%MIDI program 81
+%%MIDI program 81
+^FF FF FF F/2>^A/2A/2>A/2| \
+^dd dd dd ^cc| \
+^AA AA AA A/2>A/2A/2>A/2| \
+FF FF FF FF|
+^FF FF FF F/2>^A/2A/2>A/2| \
+^dd dd dd ^cc| \
+^AA AA AA A/2>A/2A/2>A/2| \
+FF FF FF FF|
+^FF FF ^AA/2ff/2<=f/2f/2| \
+^dd d^c cc ^GG| \
+^AA AA ^cB A/2>^G/2^F/2>=F/2| \
+FF FF ^G2 F2|
+^FF FF ^AA/2ff/2<=f/2f/2| \
+^dd d^c cc ^GG| \
+^AA AA ^cB A/2>^G/2^F/2>=F/2| \
+FF FF ^F2 ^GF|
+%%MIDI program 81
+%%MIDI program 81
+%%MIDI program 81
+V:3
+%%MIDI program 87
+z8| \
+z8| \
+z8| \
+z8|
+z8| \
+z8| \
+z8| \
+z8|
+z8| \
+z8| \
+z8| \
+z8|
+z
+%%MIDI program 87
+%%MIDI program 87
+%%MIDI program 87
+%%MIDI program 87
+^D,, zD,, zD,, zD,,| \
+zB,,, zB,,, zB,,, zB,,,| \
+z^F,, zF,, zF,, zF,,| \
+z^C,, zC,, zC,, zC,,|
+z^D,, zD,, zD,, zD,,| \
+zB,,, zB,,, zB,,, zB,,,| \
+z^F,, zF,, zF,, zF,,| \
+z^C,, zC,, zC,, zC,,|
+z^D,, zD,, zD,, zD,,| \
+zB,,, zB,,, zB,,, zB,,,| \
+z^F,, zF,, zF,, zF,,| \
+z^C,, zC,, zC,, zC,,|
+z^D,, zD,, zD,, zD,,| \
+zB,,, zB,,, zB,,, zB,,,| \
+z^F,, zF,, zF,, zF,,| \
+z^C,, zC,, zC,, zC,,|
+%%MIDI program 87
+%%MIDI program 87
+%%MIDI program 87
+V:4
+%%MIDI channel 10
+z8| \
+z8| \
+z8| \
+z8|
+z8| \
+z8| \
+z8| \
+z8|
+z8| \
+z8| \
+z8| \
+z8|
+C,,z [^F,,C,,]z C,,z [F,,C,,]z| \
+C,,z [^F,,C,,]z C,,z [F,,C,,]z| \
+C,,z [^F,,C,,]z C,,z [F,,C,,]z| \
+C,,z [^F,,C,,]z C,,z [F,,C,,]z|
+C,,z [^F,,C,,]z C,,z [F,,C,,]z| \
+C,,z [^F,,C,,]z C,,z [F,,C,,]z| \
+C,,z [^F,,C,,]z C,,z [F,,C,,]z| \
+C,,z ^F,,z3 F,,z|
+C,,z [^D,,C,,]z C,,z [D,,C,,]z| \
+C,,z [^D,,C,,]z C,,z [D,,C,,]z| \
+C,,z [^D,,C,,]z C,,z [D,,C,,]z| \
+C,,z [^D,,C,,]z C,,z [D,,C,,]z|
+C,,z [^D,,C,,]z C,,z [D,,C,,]z| \
+C,,z [^D,,C,,]z C,,z [D,,C,,]z| \
+C,,z [^D,,C,,]z C,,z [D,,C,,]z| \
+C,,z [^D,,C,,]z C,,z [D,,C,,]z|
+[^C,=C,,]3/2

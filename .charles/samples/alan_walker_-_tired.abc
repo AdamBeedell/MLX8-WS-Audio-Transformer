@@ -1,0 +1,91 @@
+X: 1
+T: from ../../samples/alan_walker_-_tired.mid
+M: 4/4
+L: 1/8
+Q:1/4=100
+K:C % 0 sharps
+V:1
+%%MIDI program 81
+%%MIDI program 81
+%%MIDI program 81
+Ez2E z^C Dz| \
+z6 zA,| \
+G3^F2D Ez| \
+z6 ED|
+Ez2E z^F Dz| \
+z6 zA,| \
+G3A2D Ez| \
+z8|
+Ez2E z^C Dz| \
+z6 zA,| \
+G3^F2D Ez| \
+z6 ED|
+Ez2E z^F Dz| \
+z6 zA,| \
+G3A2D E
+%%MIDI program 81
+%%MIDI program 81
+%%MIDI program 81
+V:2
+%%MIDI program 45
+%%MIDI program 45
+%%MIDI program 45
+[DB,]2 z[DB,]2z [B,G,]2| \
+z8| \
+[^FD]2 z[FD]2z [DA,]2| \
+z8|
+[DB,]2 z[DB,]2z [B,G,]2| \
+z8| \
+[^FD]2 z[FD]2z [DA,]2| \
+z8|
+[DB,]2 z[DB,]2z [B,G,]2| \
+z8| \
+[^FD]2 z[FD]2z [DA,]2| \
+z8|
+[DB,]2 z[DB,]2z [B,G,]2| \
+z8| \
+[^FD]2 z[FD]2z [DA,]2|
+%%MIDI program 45
+%%MIDI program 45
+%%MIDI program 45
+V:3
+%%MIDI program 87
+%%MIDI program 87
+%%MIDI program 87
+B,,,z2B,,, z2 G,,,z| \
+z8| \
+D,,z2D,, z2 A,,,z| \
+z8|
+B,,,z2B,,, z2 G,,,z| \
+z8| \
+D,,z2D,, z2 A,,,z| \
+z8|
+B,,,z2B,,, z2 G,,,z| \
+z8| \
+D,,z2D,, z2 A,,,z| \
+z8|
+B,,,z2B,,, z2 G,,,z| \
+z8| \
+D,,z2D,, z2 A,,,
+%%MIDI program 87
+%%MIDI program 87
+%%MIDI program 87
+V:4
+%%MIDI channel 10
+[^F,,C,,-]/2[F,,F,,C,,]/2[F,,F,,]/2[F,,F,,]/2 F,,C,, D,,/2z3/2 [F,,C,,]F,,/2F,,/2| \
+^F,,/2z/2C,, [F,,C,,]F,,/2F,,/2 [F,,D,,]/2z3/2 F,,z/2F,,/2| \
+[^F,,C,,-]/2[F,,F,,C,,]/2[F,,F,,]/2[F,,F,,]/2 [F,,-F,,]/2F,,/2C,, D,,/2z3/2 [F,,C,,]F,,/2F,,/2| \
+^F,,/2z/2C,, [F,,C,,]F,,/2F,,/2 [F,,D,,]/2z3/2 F,,z/2F,,/2|
+[^F,,C,,-]/2[F,,F,,C,,]/2[F,,F,,]/2[F,,F,,]/2 [F,,-F,,]/2F,,/2C,, D,,/2z3/2 [F,,C,,]F,,/2F,,/2| \
+^F,,/2z/2C,, [F,,C,,]F,,/2F,,/2 [F,,D,,]/2z3/2 F,,z/2F,,/2| \
+[^F,,C,,-]/2[F,,F,,C,,]/2[F,,F,,]/2[F,,F,,]/2 [F,,-F,,]/2F,,/2C,, D,,/2z3/2 [F,,C,,]F,,/2F,,/2| \
+^F,,/2z3/2 F,,F,,/2F,,/2 [F,,D,,]/2z3/2 F,,z/2F,,/2|
+[^F,,C,,-]/2[F,,F,,C,,]/2[F,,F,,]/2[F,,F,,]/2 [F,,-F,,]/2F,,/2C,, D,,/2z3/2 [F,,C,,]F,,/2F,,/2| \
+^F,,/2z/2C,, [F,,C,,]F,,/2F,,/2 [F,,D,,]/2z3/2 F,,z/2F,,/2| \
+[^F,,C,,-]/2[F,,F,,C,,]/2[F,,F,,]/2[F,,F,,]/2 [F,,-F,,]/2F,,/2C,, D,,/2z3/2 [F,,C,,]F,,/2F,,/2| \
+^F,,/2z/2C,, [F,,C,,]F,,/2F,,/2 [F,,D,,]/2z3/2 F,,z/2F,,/2|
+[^F,,C,,-]/2[F,,F,,C,,]/2[F,,F,,]/2[F,,F,,]/2 [F,,-F,,]/2F,,/2C,, D,,/2z3/2 [F,,C,,]F,,/2F,,/2| \
+^F,,/2z/2C,, [F,,C,,]F,,/2F,,/2 [F,,D,,]/2z3/2 F,,z/2F,,/2| \
+[^F,,C,,-]/2[F,,F,,C,,]/2[F,,F,,]/2[F,,F,,]/2 [F,,-F,,]/2F,,/2C,, D,,/2z3/2 [F,,C,,]F,,/2F,,/2| \
+^F,,/2z3/2 F,,F,,/2F,,/2 [F,,D,,]/2z3/2 F,,z/2F,,/2|
+[^C,=C,,]/2

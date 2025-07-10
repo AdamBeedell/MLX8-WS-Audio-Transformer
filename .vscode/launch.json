@@ -80,6 +80,16 @@
             "console": "integratedTerminal",
             "python": "${workspaceFolder}/.charles/.venv/bin/python",
             "cwd": "${workspaceFolder}/.charles/music2midi"
+        },
+        {
+            "name": "Debug music21_tests.py --cut example",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/.charles/music2midi/test/music21_tests.py",
+            "args": ["--cut", "../../samples/alan_walker_-_faded.mid", "10"],
+            "console": "integratedTerminal",
+            "python": "${workspaceFolder}/.charles/.venv/bin/python",
+            "cwd": "${workspaceFolder}/.charles/music2midi/test"
         }
     ]
 }
