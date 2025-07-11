@@ -88,3 +88,26 @@ This will:
 - Sort all `.mid` files by size (ascending).
 - Keep the 10,000 smallest files in the current folder.
 - Move all larger files to the `./t` directory.
+
+
+## MIDI 2 WAV
+
+Download sound file from here: https://member.keymusician.com/Member/FluidR3_GM/index.html
+Direct download link is: https://keymusician01.s3.amazonaws.com/FluidR3_GM.zip
+
+```bash
+ fluidsynth -ni /Users/charles/Downloads/FluidR3_GM/FluidR3_GM.sf2 /Users/charles/Downloads/alan_walker_-_the_spectre.mid -F alan_walker_-_the_spectre_fluidsynth.wav
+ ```
+
+
+ ## FFMpeg to split WAV file:
+
+DO NOT USE: copy codec but not resampling with 16000Hz as our trained model:
+ ```bash
+ffmpeg -i alan_walker_-_the_spectre_fluidsynth.wav -f segment -segment_time 10 -c copy alan_walker_-_the_spectre_fluidsynth_%02d.wav
+```
+
+DO THIS INSTEAD: resampling to 16000 Hz
+```bash
+ffmpeg -i alan_walker_-_the_spectre_fluidsynth.wav -ar 16000 -f segment -segment_time 10 alan_walker_-_the_spectre_fluidsynth_%02d.wav
+```

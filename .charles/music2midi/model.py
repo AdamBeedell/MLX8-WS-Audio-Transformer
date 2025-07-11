@@ -4,16 +4,16 @@ import os
 import torch
 import torch.nn as nn
 import numpy as np
-import logging
 from typing import List, Optional, Union
-from dotenv import load_dotenv
 from transformers import WhisperProcessor, WhisperModel, AutoTokenizer, AutoModelForCausalLM
-import colorlog
 
+from logger_utils import setup_logger
+logger = setup_logger(__name__)
+
+from dotenv import load_dotenv
 load_dotenv()
 
-# Setup logger (same as in train.py)
-logger = colorlog.getLogger(__name__)
+
 
 WHISPER_MODEL_NAME = os.getenv("WHISPER_MODEL", "openai/whisper-base")
 QWEN_MODEL_NAME = os.getenv("QWEN_MODEL", "Qwen/Qwen3-0.6B-Base")
@@ -287,6 +287,9 @@ class MusicTranscriptionModel(nn.Module):
         
         return outputs.loss
 
+    """
+    Original generate method for autoregressive generation.
+    """
     @torch.no_grad()
     def generate(self, waveform: np.ndarray, sampling_rate: int, max_new_tokens=256) -> str:
         """
@@ -339,3 +342,146 @@ class MusicTranscriptionModel(nn.Module):
         
         # Decode the generated tokens
         return self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+
+    # """
+    # Updated generate method to prioritize ABC tokens during generation.
+    # This method uses a custom token set to ensure we generate valid ABC notation - but due to no generated ABC Notation tokens, it is not working.
+    # """
+
+    # @torch.no_grad()
+    # def generate(self, waveform: np.ndarray, sampling_rate: int, max_new_tokens=256) -> str:
+    #     """
+    #     Inference method to generate ABC notation from an audio waveform.
+    #     Prioritizes ABC tokens during generation.
+    #     """
+    #     self.eval()
+    #     device = self.text_decoder.device
+
+    #     # Get audio features
+    #     audio_features = self.audio_encoder([waveform], sampling_rate)
+
+    #     # Start with a helpful ABC notation prompt
+    #     abc_prefix = "X:1\nT:Transcription\nM:4/4\nL:1/8\nK:C\n"
+    #     prefix_tokens = self.tokenizer(abc_prefix, return_tensors="pt").input_ids.to(device)
+    #     current_input_ids = prefix_tokens
+
+    #     # --- Build ABC token id set ---
+    #     # Option 1: Use added_tokens.json if available
+    #     abc_token_ids = set()
+    #     added_tokens_path = os.path.join(TOKENIZER_DIR, "added_tokens.json")
+    #     if os.path.exists(added_tokens_path):
+    #         import json
+    #         with open(added_tokens_path, "r") as f:
+    #             added_tokens = json.load(f)
+    #         abc_token_ids = set(added_tokens.values())
+    #     else:
+    #         # Option 2: Fallback to pattern matching (less precise)
+    #         vocab = self.tokenizer.get_vocab()
+    #         abc_token_ids = set(
+    #             idx for token, idx in vocab.items()
+    #             if any(x in token for x in ["X:", "T:", "M:", "L:", "K:", "|", "[", "]", ":", "/", "'", ",", "^", "_", "=", "A", "B", "C", "D", "E", "F", "G", "a", "b", "c", "d", "e", "f", "g", "z", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0"])
+    #         )
+
+    #     eos_token_id = self.tokenizer.eos_token_id
+
+    #     generated_tokens = []
+    #     temperature = 0.7
+
+    #     for _ in range(max_new_tokens):
+    #         text_embeddings = self.text_decoder.model.embed_tokens(current_input_ids)
+    #         audio_features = audio_features.to(dtype=text_embeddings.dtype)
+    #         fused_embeddings = self.cross_attention_adapter(text_embeddings, audio_features)
+    #         outputs = self.text_decoder(inputs_embeds=fused_embeddings, return_dict=True)
+    #         next_token_logits = outputs.logits[:, -1, :]
+
+    #         # Mask out non-ABC tokens
+    #         mask = torch.full_like(next_token_logits, float('-inf'))
+    #         mask[:, list(abc_token_ids)] = 0
+    #         next_token_logits = next_token_logits + mask
+
+    #         # Sample next token
+    #         next_token_id = torch.multinomial(torch.softmax(next_token_logits / temperature, dim=-1), 1)
+
+    #         if next_token_id.item() == eos_token_id:
+    #             break
+    #         generated_tokens.append(next_token_id.item())
+    #         current_input_ids = torch.cat([current_input_ids, next_token_id], dim=1)
+
+    #         # Optionally, trim context if too long
+    #         if current_input_ids.shape[1] > 128:
+    #             current_input_ids = torch.cat([
+    #                 prefix_tokens,
+    #                 current_input_ids[:, -64:][:, -(128-prefix_tokens.shape[1]):]
+    #             ], dim=1)
+
+    #     return abc_prefix + self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+
+    # """ 
+    # Tried to fix things using prompts, but not working
+    # """
+    # @torch.no_grad()
+    # def generate(self, waveform: np.ndarray, sampling_rate: int, max_new_tokens=256) -> str:
+    #     """
+    #     Inference method to generate ABC notation from an audio waveform.
+    #     """
+    #     self.eval() # Set model to evaluation mode
+        
+    #     # Get audio features
+    #     audio_features = self.audio_encoder([waveform], sampling_rate)
+        
+    #     # Start with a helpful ABC notation prompt to guide the generation
+    #     abc_prefix = "X:1\nT:Transcription\nM:4/4\nL:1/8\nK:C\n"
+    #     prefix_tokens = self.tokenizer(abc_prefix, return_tensors="pt").input_ids.to(self.text_decoder.device)
+    #     current_input_ids = prefix_tokens
+        
+    #     # Generate autoregressively with cross-attention
+    #     generated_tokens = []
+    #     temperature = 0.5  # Lower temperature for more focused generation
+        
+    #     for _ in range(max_new_tokens):
+    #         # Get text embeddings
+    #         text_embeddings = self.text_decoder.model.embed_tokens(current_input_ids)
+            
+    #         # Ensure audio features match text embeddings dtype
+    #         audio_features = audio_features.to(dtype=text_embeddings.dtype)
+            
+    #         # Apply cross-attention
+    #         fused_embeddings = self.cross_attention_adapter(text_embeddings, audio_features)
+            
+    #         # Forward pass
+    #         outputs = self.text_decoder(
+    #             inputs_embeds=fused_embeddings,
+    #             return_dict=True
+    #         )
+            
+    #         # Get next token with lower temperature
+    #         next_token_logits = outputs.logits[:, -1, :]
+            
+    #         # Filter logits to favor common ABC notation characters
+    #         abc_chars = "ABCDEFGabcdefg|:[]1234567890/^_=,'\""
+    #         for i, char in enumerate(self.tokenizer.get_vocab()):
+    #             if len(char) == 1 and char not in abc_chars:
+    #                 next_token_logits[0, i] = -float('inf')
+            
+    #         # Sample with temperature
+    #         next_token_id = torch.multinomial(torch.softmax(next_token_logits / temperature, dim=-1), 1)
+            
+    #         # Check for EOS
+    #         if next_token_id.item() == self.tokenizer.eos_token_id:
+    #             break
+                
+    #         generated_tokens.append(next_token_id.item())
+            
+    #         # Update input for next iteration - use only the latest token
+    #         current_input_ids = torch.cat([current_input_ids, next_token_id], dim=1)
+            
+    #         # Trim context if it gets too long (keep the prefix and recent tokens)
+    #         if current_input_ids.shape[1] > 128:
+    #             current_input_ids = torch.cat([
+    #                 prefix_tokens, 
+    #                 current_input_ids[:, -64:][:, -(128-prefix_tokens.shape[1]):]], 
+    #                 dim=1
+    #             )
+        
+    #     # Combine the prefix with the generated tokens for the final output
+    #     return abc_prefix + self.tokenizer.decode(generated_tokens, skip_special_tokens=True)

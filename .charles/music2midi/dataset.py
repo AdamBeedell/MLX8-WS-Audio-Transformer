@@ -6,14 +6,13 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 from transformers import AutoTokenizer
-from dotenv import load_dotenv
-import logging
-import colorlog
 
+from logger_utils import setup_logger
+logger = setup_logger(__name__)
+
+from dotenv import load_dotenv
 load_dotenv()
 
-# Setup logger
-logger = colorlog.getLogger(__name__)
 
 PREPROCESSED_DIR = os.getenv("PREPROCESSED_DATA_DIR", "../.data/preprocessed")
 TOKENIZER_DIR = os.path.join(PREPROCESSED_DIR, "qwen_with_abc_tokenizer")

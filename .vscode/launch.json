@@ -99,6 +99,15 @@
             "console": "integratedTerminal",
             "python": "${workspaceFolder}/.charles/.venv/bin/python",
             "cwd": "${workspaceFolder}/.charles/music2midi"
+        },
+        {
+            "name": "Debug inference.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/.charles/music2midi/inference.py",
+            "console": "integratedTerminal",
+            "python": "${workspaceFolder}/.charles/.venv/bin/python",
+            "cwd": "${workspaceFolder}/.charles/music2midi"
         }
     ]
 }

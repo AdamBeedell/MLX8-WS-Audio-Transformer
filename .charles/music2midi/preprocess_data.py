@@ -1,10 +1,8 @@
 # preprocess_data.py (Final Corrected Version)
 
 import argparse
-import logging
 import os
 import re
-import shutil
 import subprocess
 from multiprocessing import Pool, cpu_count
 from pathlib import Path
@@ -12,9 +10,7 @@ from typing import Set
 import gc
 import copy
 import json
-import tempfile
 
-import colorlog
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -32,9 +28,12 @@ from music21.midi.translate import TranslateWarning
 warnings.filterwarnings("ignore", category=TranslateWarning)
 
 
+from logger_utils import setup_logger
+logger = setup_logger(__name__)
 
 # --- Setup ---
 load_dotenv()
+
 
 # --- Configuration (from .env) ---
 MIDI_DIR = Path(os.getenv("MIDI_FILES_DIR", "../.data/midis"))
@@ -51,23 +50,6 @@ BPE_VOCAB_SIZE = int(os.getenv("BPE_VOCAB_SIZE", 2000))
 CHOPPED_MIDI_DIR = PREPROCESSED_DIR / "chopped_midis"
 RENDERED_WAV_DIR = PREPROCESSED_DIR / "rendered_wavs"
 ABC_FILES_DIR = PREPROCESSED_DIR / "abc_files"
-
-# --- Logger Setup ---
-# (Your colorlog setup code is perfect, keeping it as is)
-SUCCESS_LEVEL_NUM = 25
-logging.addLevelName(SUCCESS_LEVEL_NUM, "SUCCESS")
-def success(self, message, *args, **kws):
-    if self.isEnabledFor(SUCCESS_LEVEL_NUM): self._log(SUCCESS_LEVEL_NUM, message, args, **kws)
-logging.Logger.success = success
-handler = colorlog.StreamHandler()
-handler.setFormatter(colorlog.ColoredFormatter(
-    "%(log_color)s%(levelname)-8s%(reset)s | %(message)s",
-    log_colors={'DEBUG':'white','INFO':'cyan','SUCCESS':'green','WARNING':'yellow','ERROR':'red','CRITICAL':'bold_red'}
-))
-logger = colorlog.getLogger()
-if not logger.handlers: logger.addHandler(handler)
-logger.setLevel(logging.INFO)
-
 
 def get_offset_for_seconds(score, seconds_target):
     """
