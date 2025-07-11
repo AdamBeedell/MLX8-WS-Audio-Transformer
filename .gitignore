@@ -1,10 +1,12 @@
 data/
 AB/data/
 *.pth
-MIDI/
-MIDI2WAV/
-whisper-small-hi/
-whisper-small-piano/
+AB/MIDI/
+AB/MIDI2WAV/
+AB/whisper-small-hi/
+AB/whisper-small-piano/
+AB/uv.lock
+uv.lock
 
 
 # Byte-compiled / optimized / DLL files
