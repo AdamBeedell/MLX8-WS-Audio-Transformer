@@ -1,6 +1,10 @@
 data/
 AB/data/
 *.pth
+MIDI/
+MIDI2WAV/
+whisper-small-hi/
+whisper-small-piano/
 
 
 # Byte-compiled / optimized / DLL files
@@ -177,10 +181,8 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
-
 .DS_Store
 
 .data/
 
 wandb/
-
